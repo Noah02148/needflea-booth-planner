@@ -23,6 +23,8 @@ let _dwgLayerColors = {};       // { layerName: aciColorNumber }
 let _dwgBounds = null;          // { minX, minY, maxX, maxY, bx0, bx1, by0, by1 }
 let _dwgRasterMode = false;     // true when using rasterized PNG fallback (layers not toggleable)
 let _dxfFullData = null;        // stored DXF data for layer toggling in ODA path
+let _convertedDxfText = null;   // raw DXF text from ODA conversion (for download)
+let _convertedDxfName = null;   // filename for DXF download
 let _dwgBlockDefs = {};         // block definitions for INSERT expansion
 
 // Calibration state
@@ -1259,6 +1261,8 @@ async function loadDWGFile(file) {
         try {
           console.log('Trying ODA DWG→DXF fallback...');
           const dxfText = await convertDWGtoDXF(e.target.result, file.name);
+          _convertedDxfText = dxfText;
+          _convertedDxfName = file.name.replace(/\.dwg$/i, '.dxf');
           console.log('DXF received, parsing...', dxfText.length, 'chars');
           document.getElementById('tool-hint').textContent = '正在解析 DXF 数据…';
           // Don't store large DXF in cadFileData base64 (can be huge)
@@ -2602,6 +2606,17 @@ setInterval(_autoSave, 30000);
 
 // ── GLOBAL EXPORTS ────────────────────────────────────────────────────────────
 window.loadDXF = loadDXF;
+
+window.downloadConvertedDXF = function() {
+  if (!_convertedDxfText) { alert('没有可下载的 DXF 文件（仅 DWG→DXF 转换后可用）'); return; }
+  const blob = new Blob([_convertedDxfText], { type: 'application/dxf' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = _convertedDxfName || 'converted.dxf';
+  a.click();
+  URL.revokeObjectURL(url);
+};
 window.loadCADFile = loadCADFile;
 window.setTool = setTool;
 window.selectCat = selectCat;
