@@ -1318,7 +1318,12 @@ async function loadDWGFile(file) {
       }
 
       if (!parsed) {
-        alert('解析 DWG 文件失败，请转化成 DXF 格式上传或联系开发者');
+        const isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+        if (isLocal) {
+          alert('解析 DWG 文件失败。\n\n本地开发提示：请确认 DWG 转换服务器已启动：\nnode dwg-server.mjs');
+        } else {
+          alert('解析 DWG 文件失败，请转化成 DXF 格式上传或联系开发者');
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
