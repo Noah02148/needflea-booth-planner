@@ -22,6 +22,7 @@ let _dwgLayerVisibility = {};   // { layerName: true/false }
 let _dwgLayerColors = {};       // { layerName: aciColorNumber }
 let _dwgBounds = null;          // { minX, minY, maxX, maxY, bx0, bx1, by0, by1 }
 let _dwgRasterMode = false;     // true when using rasterized PNG fallback (layers not toggleable)
+let _dxfFullData = null;        // stored DXF data for layer toggling in ODA path
 let _dwgBlockDefs = {};         // block definitions for INSERT expansion
 
 // Calibration state
@@ -972,44 +973,26 @@ async function parseDWGtoSVG(arrayBuffer) {
   };
 }
 
-// ── FALLBACK: libredwg-web via local conversion server (port 3001) ──
+// ── FALLBACK: ODA DWG→DXF conversion server (port 3001) ──
 
-async function parseDWGWithLibreDwg(arrayBuffer) {
-  console.log('Calling DWG conversion server...');
+async function convertDWGtoDXF(arrayBuffer, filename) {
+  console.log('Calling ODA DWG→DXF server...');
+  document.getElementById('tool-hint').textContent = '正在转换 DWG → DXF（ODA 引擎）…';
+
   const resp = await fetch('http://localhost:3001/convert', {
     method: 'POST',
+    headers: { 'X-Filename': encodeURIComponent(filename || 'input.dwg') },
     body: new Uint8Array(arrayBuffer),
   });
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: 'Server error' }));
-    throw new Error(err.error || 'DWG 转换服务器错误');
+    throw new Error(err.error || 'DWG→DXF 转换失败');
   }
 
-  const data = await resp.json();
-  const { svg, bounds, metersPerUnit, layers } = data;
-
-  if (!svg || svg.length < 100) throw new Error('转换结果为空');
-  console.log(`libredwg-web server: SVG ${(svg.length/1024).toFixed(0)} KB, bounds [${bounds.minX.toFixed(1)},${bounds.minY.toFixed(1)}]-[${bounds.maxX.toFixed(1)},${bounds.maxY.toFixed(1)}], metersPerUnit=${metersPerUnit}`);
-
-  // Populate layer globals so the layer panel works
-  if (layers) {
-    _dwgLayerColors = {};
-    _dwgLayerVisibility = {};
-    _dwgEntitiesByLayer = {};
-    for (const [name, info] of Object.entries(layers)) {
-      _dwgLayerColors[name] = info.color || 7;
-      _dwgLayerVisibility[name] = true; // show all layers by default
-      // Create dummy entity array with correct count for the panel display
-      _dwgEntitiesByLayer[name] = new Array(info.entityCount || 0);
-    }
-    _dwgBounds = bounds;
-    _dwgRasterMode = true;
-    console.log(`Populated ${Object.keys(layers).length} layers for panel (raster mode)`);
-    populateLayerPanel();
-  }
-
-  return { svgString: svg, bounds, metersPerUnit };
+  const dxfText = await resp.text();
+  console.log(`ODA conversion done: ${(dxfText.length / 1024).toFixed(0)} KB DXF`);
+  return dxfText;
 }
 
 /**
@@ -1169,8 +1152,25 @@ function setAllLayersVisible(visible) {
  * Regenerate SVG from visible layers and reload the canvas background.
  */
 function _regenerateSvgBackground() {
-  if (!_dwgBounds) return;
   if (_dwgRasterMode) return; // rasterized PNG fallback — layers not toggleable
+
+  // DXF path: re-render with filtered entities
+  if (_dxfFullData) {
+    const filtered = { ..._dxfFullData, entities: [] };
+    if (_dxfFullData.entities) {
+      filtered.entities = _dxfFullData.entities.filter(ent => {
+        const ln = ent.layer || '0';
+        return _dwgLayerVisibility[ln] !== false;
+      });
+    }
+    const savedOx = renderer.offsetX, savedOy = renderer.offsetY, savedScale = renderer.scale;
+    renderer.load(filtered);
+    renderer.offsetX = savedOx; renderer.offsetY = savedOy; renderer.scale = savedScale;
+    render();
+    return;
+  }
+
+  if (!_dwgBounds) return;
 
   const svgString = generateSVGFromLayers();
   const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
@@ -1235,40 +1235,88 @@ async function loadDWGFile(file) {
       _cadFileData = { name: file.name || 'file.dwg', base64: btoa(binary) };
 
       document.getElementById('tool-hint').textContent = '正在解析 DWG 文件，请稍候…';
-      let result;
+
+      // Strategy 1: try libdxfrw WASM (browser-side, fast)
+      let parsed = false;
       try {
-        result = await parseDWGtoSVG(e.target.result);
+        const result = await parseDWGtoSVG(e.target.result);
+        const { svgString, bounds } = result;
+        if (result.metersPerUnit) { metersPerUnit = result.metersPerUnit; updateScaleInfo(); }
+        document.getElementById('tool-hint').textContent = '正在渲染背景…';
+        const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => { URL.revokeObjectURL(url); renderer.loadSvgBackground(img, bounds); onSvgLoaded(); };
+        img.onerror = () => { URL.revokeObjectURL(url); alert('SVG 渲染失败'); };
+        img.src = url;
+        parsed = true;
       } catch (primaryErr) {
-        console.warn('libdxfrw failed, trying libredwg-web fallback:', primaryErr);
-        document.getElementById('tool-hint').textContent = '主解析器失败，正在尝试备用解析器…';
-        result = await parseDWGWithLibreDwg(e.target.result);
-      }
-      const { svgString, bounds } = result;
-
-      // Auto-set scale from DWG units
-      if (result.metersPerUnit) {
-        metersPerUnit = result.metersPerUnit;
-        updateScaleInfo();
-        const unitName = metersPerUnit === 0.001 ? 'mm' : metersPerUnit === 0.01 ? 'cm' : metersPerUnit === 1 ? 'm' : `${metersPerUnit}m/unit`;
-        console.log(`Auto scale: 1 unit = ${unitName}, metersPerUnit = ${metersPerUnit}`);
+        console.warn('libdxfrw failed:', primaryErr);
       }
 
-      // Convert SVG string to an Image object
-      document.getElementById('tool-hint').textContent = '正在渲染 SVG 背景…';
-      const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        renderer.loadSvgBackground(img, bounds);
-        onSvgLoaded();
-        console.log('DWG SVG background loaded successfully');
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        alert('SVG 渲染失败，请重试。');
-      };
-      img.src = url;
+      // Strategy 2: ODA server DWG→DXF conversion + DXF parser
+      if (!parsed) {
+        try {
+          console.log('Trying ODA DWG→DXF fallback...');
+          const dxfText = await convertDWGtoDXF(e.target.result, file.name);
+          console.log('DXF received, parsing...', dxfText.length, 'chars');
+          document.getElementById('tool-hint').textContent = '正在解析 DXF 数据…';
+          // Don't store large DXF in cadFileData base64 (can be huge)
+          if (dxfText.length < 5 * 1024 * 1024) {
+            _cadFileData = { name: file.name.replace(/\.dwg$/i, '.dxf'), base64: btoa(unescape(encodeURIComponent(dxfText))) };
+          }
+          const dxfData = parser.parse(dxfText);
+          console.log('DXF parsed, entities:', dxfData.entities?.length);
+
+          // Populate layer panel from DXF data (layers stored in dxfData.layers)
+          const dxfLayers = dxfData.layers || {};
+          _dwgLayerColors = {};
+          _dwgLayerVisibility = {};
+          _dwgEntitiesByLayer = {};
+          for (const [name, layer] of Object.entries(dxfLayers)) {
+            _dwgLayerColors[name] = Math.abs(layer.color || 7);
+            _dwgLayerVisibility[name] = layer.visible !== false;
+            _dwgEntitiesByLayer[name] = [];
+          }
+          if (dxfData.entities) {
+            for (const ent of dxfData.entities) {
+              const ln = ent.layer || '0';
+              if (!_dwgEntitiesByLayer[ln]) {
+                _dwgEntitiesByLayer[ln] = [];
+                _dwgLayerVisibility[ln] = true;
+                _dwgLayerColors[ln] = 7;
+              }
+              _dwgEntitiesByLayer[ln].push(ent);
+            }
+          }
+          _dwgRasterMode = false;
+          _dxfFullData = dxfData; // store for layer toggling
+          populateLayerPanel();
+          console.log('Layer panel populated:', Object.keys(dxfLayers).length, 'layers');
+
+          onDXFParsed(dxfData);
+
+          // Auto-detect units from DXF header $INSUNITS (must be AFTER onDXFParsed which resets metersPerUnit)
+          const insUnitsMap = { 1: 0.0254, 2: 0.3048, 3: 1609.344, 4: 0.001, 5: 0.01, 6: 1.0, 7: 1000.0 };
+          const insMatch = dxfText.match(/\$INSUNITS[\s\S]*?70\s*\n\s*(\d+)/);
+          if (insMatch) {
+            const insVal = parseInt(insMatch[1]);
+            if (insUnitsMap[insVal]) {
+              metersPerUnit = insUnitsMap[insVal];
+              updateScaleInfo();
+              console.log('Auto scale from INSUNITS=' + insVal + ' → metersPerUnit=' + metersPerUnit);
+            }
+          }
+          parsed = true;
+        } catch (odaErr) {
+          console.error('ODA fallback failed:', odaErr);
+          alert('ODA 转换失败: ' + (odaErr.message || odaErr));
+        }
+      }
+
+      if (!parsed) {
+        alert('DWG 文件处理失败：浏览器解析器和 ODA 转换器均无法处理此文件。\n请确保 DWG 转换服务器正在运行（端口 3001）。');
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       alert('DWG 文件处理失败：' + msg);
