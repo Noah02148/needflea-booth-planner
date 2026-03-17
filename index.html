@@ -219,6 +219,7 @@
   </select>
   <div class="tb-sep"></div>
   <button class="tb-btn" id="btn-guard" onclick="setTool('guard')">👮 安保</button>
+  <button class="tb-btn" id="btn-fire" onclick="setTool('fire')">🧯 灭火器</button>
   <button class="tb-btn" id="btn-arrow" onclick="setTool('arrow')">→ 动线</button>
   <button class="tb-btn" id="btn-zone" onclick="setTool('zone')">T 文字</button>
   <button class="tb-btn" id="btn-line" onclick="setTool('line')">✏ 画线</button>
@@ -301,6 +302,7 @@
       <p id="batch-preview" style="font-size:12px;color:var(--text3);margin-bottom:14px;"></p>
       <div style="display:flex;gap:8px;">
         <button onclick="cancelBatchNumber()" style="flex:1;height:34px;border-radius:7px;font-size:13px;cursor:pointer;border:1px solid var(--border2);background:none;">取消</button>
+        <button onclick="clearBatchNumber()" style="flex:1;height:34px;border-radius:7px;font-size:13px;cursor:pointer;border:1px solid #e74c3c;background:none;color:#e74c3c;">清除编号</button>
         <button onclick="confirmBatchNumber()" style="flex:1;height:34px;border-radius:7px;font-size:13px;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#fff;">确认编号</button>
       </div>
     </div>

@@ -21,6 +21,7 @@ let _dwgEntitiesByLayer = {};   // { layerName: [entity, ...] }
 let _dwgLayerVisibility = {};   // { layerName: true/false }
 let _dwgLayerColors = {};       // { layerName: aciColorNumber }
 let _dwgBounds = null;          // { minX, minY, maxX, maxY, bx0, bx1, by0, by1 }
+let _dwgRasterMode = false;     // true when using rasterized PNG fallback (layers not toggleable)
 let _dwgBlockDefs = {};         // block definitions for INSERT expansion
 
 // Calibration state
@@ -533,6 +534,16 @@ function _drawExportLegend(ectx, lx, ly, w, stats, cats) {
     ectx.fillText(String(stats.guards), lx + w, y);
     ectx.textAlign = 'left';
   }
+  if (stats.fires > 0) {
+    y += 18;
+    ectx.font = '13px "PingFang SC", sans-serif';
+    ectx.fillStyle = textColor;
+    ectx.fillText('灭火器', lx, y);
+    ectx.fillStyle = subColor;
+    ectx.textAlign = 'right';
+    ectx.fillText(String(stats.fires), lx + w, y);
+    ectx.textAlign = 'left';
+  }
 }
 
 function toggleTheme() {
@@ -788,14 +799,22 @@ function _expandInsert(ins, blockDefs, output, depth) {
  * Returns { svgString, bounds: { minX, minY, maxX, maxY } }
  */
 async function parseDWGtoSVG(arrayBuffer) {
+  _dwgRasterMode = false;
   const lib = await ensureLibDxfrw();
   const db = new lib.DRW_Database();
   const fh = new lib.DRW_FileHandler();
   fh.database = db;
 
-  const dwg = new lib.DRW_DwgR(arrayBuffer);
-  const ok = dwg.read(fh, false);
-  dwg.delete();
+  let ok = false;
+  try {
+    const dwg = new lib.DRW_DwgR(arrayBuffer);
+    ok = dwg.read(fh, false);
+    dwg.delete();
+  } catch (wasmErr) {
+    db.delete(); fh.delete();
+    console.error('WASM DWG read exception:', wasmErr);
+    throw new Error('DWG 文件解析时 WASM 崩溃，文件可能过大或包含不受支持的实体。请尝试在 AutoCAD 中另存为较低版本（如 2013 格式）后重试。');
+  }
 
   if (!ok) {
     db.delete(); fh.delete();
@@ -822,8 +841,10 @@ async function parseDWGtoSVG(arrayBuffer) {
     const b = db.blocks.get(i);
     const ents = [];
     for (let j = 0; j < b.entities.size(); j++) {
-      const raw = _extractEntityForSvg(lib, b.entities.get(j), layerColors, layerLT);
-      if (raw) ents.push(raw);
+      try {
+        const raw = _extractEntityForSvg(lib, b.entities.get(j), layerColors, layerLT);
+        if (raw) ents.push(raw);
+      } catch (e) { /* skip unsupported block entity */ }
     }
     if (ents.length > 0) blockDefs[b.name] = ents;
   }
@@ -834,13 +855,15 @@ async function parseDWGtoSVG(arrayBuffer) {
   const bxs = [], bys = [];
   const entities = db.mBlock.entities;
   for (let i = 0; i < entities.size(); i++) {
-    const e = entities.get(i);
-    const item = _extractEntityForSvg(lib, e, layerColors, layerLT);
-    if (item) {
-      msEntities.push(item);
-      if (item.t === 'L') { bxs.push(item.x1, item.x2); bys.push(item.y1, item.y2); }
-      if (item.t === 'P') item.pts.forEach(p => { bxs.push(p[0]); bys.push(p[1]); });
-    }
+    try {
+      const e = entities.get(i);
+      const item = _extractEntityForSvg(lib, e, layerColors, layerLT);
+      if (item) {
+        msEntities.push(item);
+        if (item.t === 'L') { bxs.push(item.x1, item.x2); bys.push(item.y1, item.y2); }
+        if (item.t === 'P') item.pts.forEach(p => { bxs.push(p[0]); bys.push(p[1]); });
+      }
+    } catch (e) { /* skip unsupported entity */ }
   }
 
   // Read $INSUNITS from header for auto unit detection
@@ -949,6 +972,46 @@ async function parseDWGtoSVG(arrayBuffer) {
   };
 }
 
+// ── FALLBACK: libredwg-web via local conversion server (port 3001) ──
+
+async function parseDWGWithLibreDwg(arrayBuffer) {
+  console.log('Calling DWG conversion server...');
+  const resp = await fetch('http://localhost:3001/convert', {
+    method: 'POST',
+    body: new Uint8Array(arrayBuffer),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ error: 'Server error' }));
+    throw new Error(err.error || 'DWG 转换服务器错误');
+  }
+
+  const data = await resp.json();
+  const { svg, bounds, metersPerUnit, layers } = data;
+
+  if (!svg || svg.length < 100) throw new Error('转换结果为空');
+  console.log(`libredwg-web server: SVG ${(svg.length/1024).toFixed(0)} KB, bounds [${bounds.minX.toFixed(1)},${bounds.minY.toFixed(1)}]-[${bounds.maxX.toFixed(1)},${bounds.maxY.toFixed(1)}], metersPerUnit=${metersPerUnit}`);
+
+  // Populate layer globals so the layer panel works
+  if (layers) {
+    _dwgLayerColors = {};
+    _dwgLayerVisibility = {};
+    _dwgEntitiesByLayer = {};
+    for (const [name, info] of Object.entries(layers)) {
+      _dwgLayerColors[name] = info.color || 7;
+      _dwgLayerVisibility[name] = true; // show all layers by default
+      // Create dummy entity array with correct count for the panel display
+      _dwgEntitiesByLayer[name] = new Array(info.entityCount || 0);
+    }
+    _dwgBounds = bounds;
+    _dwgRasterMode = true;
+    console.log(`Populated ${Object.keys(layers).length} layers for panel (raster mode)`);
+    populateLayerPanel();
+  }
+
+  return { svgString: svg, bounds, metersPerUnit };
+}
+
 /**
  * Generate SVG string from currently visible layers' entities.
  */
@@ -1040,16 +1103,24 @@ function populateLayerPanel() {
       const entityCount = (_dwgEntitiesByLayer[name] || []).length;
       // Use index-based data attribute to avoid escaping issues with layer names
       html += `<label class="layer-item">
-        <input type="checkbox" ${visible ? 'checked' : ''} data-layer-idx="${idx}" onchange="toggleLayerByIdx(${idx}, this.checked)">
+        <input type="checkbox" ${visible ? 'checked' : ''} data-layer-idx="${idx}" onchange="toggleLayerByIdx(${idx}, this.checked)" ${_dwgRasterMode ? 'disabled' : ''}>
         <span class="layer-color" style="background:${hex}"></span>
         <span class="layer-name">${displayName.replace(/</g, '&lt;')}</span>
         <span class="layer-count">${entityCount}</span>
       </label>\n`;
     });
 
+    if (_dwgRasterMode) {
+      html = `<div style="font-size:11px;color:var(--text3);padding:4px 0 8px;font-style:italic">备用解析器模式，图层切换不可用</div>` + html;
+    }
     container.innerHTML = html;
+    // Disable select-all/none buttons in raster mode
+    const btnAll = document.getElementById('btn-layer-all');
+    const btnNone = document.getElementById('btn-layer-none');
+    if (btnAll) btnAll.disabled = _dwgRasterMode;
+    if (btnNone) btnNone.disabled = _dwgRasterMode;
     _updateLayerSelectAllState();
-    console.log(`Layer panel: ${_dwgLayerNamesList.length} layers`);
+    console.log(`Layer panel: ${_dwgLayerNamesList.length} layers${_dwgRasterMode ? ' (raster mode)' : ''}`);
   } catch(err) {
     console.error('populateLayerPanel error:', err);
   }
@@ -1099,6 +1170,7 @@ function setAllLayersVisible(visible) {
  */
 function _regenerateSvgBackground() {
   if (!_dwgBounds) return;
+  if (_dwgRasterMode) return; // rasterized PNG fallback — layers not toggleable
 
   const svgString = generateSVGFromLayers();
   const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
@@ -1163,7 +1235,14 @@ async function loadDWGFile(file) {
       _cadFileData = { name: file.name || 'file.dwg', base64: btoa(binary) };
 
       document.getElementById('tool-hint').textContent = '正在解析 DWG 文件，请稍候…';
-      const result = await parseDWGtoSVG(e.target.result);
+      let result;
+      try {
+        result = await parseDWGtoSVG(e.target.result);
+      } catch (primaryErr) {
+        console.warn('libdxfrw failed, trying libredwg-web fallback:', primaryErr);
+        document.getElementById('tool-hint').textContent = '主解析器失败，正在尝试备用解析器…';
+        result = await parseDWGWithLibreDwg(e.target.result);
+      }
       const { svgString, bounds } = result;
 
       // Auto-set scale from DWG units
@@ -1191,8 +1270,9 @@ async function loadDWGFile(file) {
       };
       img.src = url;
     } catch (err) {
-      alert('DWG 文件处理失败：' + err.message);
-      console.error(err);
+      const msg = err instanceof Error ? err.message : String(err);
+      alert('DWG 文件处理失败：' + msg);
+      console.error('DWG load error:', err);
     }
   };
   reader.readAsArrayBuffer(file);
@@ -1303,6 +1383,7 @@ function setTool(t) {
     select: '点击选择 · Shift多选 · 拖动移动 · R/L旋转 · 右键删除',
     booth: metersPerUnit ? '点击放置帐篷（尺寸精确）' : '点击放置帐篷（请先定比例尺以精确尺寸）',
     guard: '点击放置安保点位',
+    fire: '点击放置灭火器',
     arrow: '拖动画动线箭头',
     zone: '点击放置文字标注',
     measure: '点击第一个测量点',
@@ -1320,7 +1401,7 @@ function setTool(t) {
   if (t !== 'line') lineState = null;
   if (t !== 'crop') { cropState = null; render(); }
   // Update toolbar active states
-  ['select','booth','guard','arrow','zone','line','measure','dim','area','eraser'].forEach(id => {
+  ['select','booth','guard','fire','arrow','zone','line','measure','dim','area','eraser'].forEach(id => {
     const btn = document.getElementById('btn-' + id);
     if (btn) btn.classList.toggle('active', id === t);
   });
@@ -1434,7 +1515,7 @@ canvas.addEventListener('mousedown', e => {
       dragItem = hit;
       if (hit.type === 'booth' || hit.type === 'zone') {
         dragOffset = { dwx: wx - hit.wx, dwy: wy - hit.wy };
-      } else if (hit.type === 'guard') {
+      } else if (hit.type === 'guard' || hit.type === 'fire') {
         dragOffset = { dwx: wx - hit.wx, dwy: wy - hit.wy };
       } else if (hit.type === 'line' && hit.pts) {
         dragOffset = { dwx: wx - hit.pts[0].wx, dwy: wy - hit.pts[0].wy };
@@ -1469,6 +1550,12 @@ canvas.addEventListener('mousedown', e => {
 
   if (tool === 'guard') {
     booths.addGuard(wx, wy);
+    render();
+    return;
+  }
+
+  if (tool === 'fire') {
+    booths.addFire(wx, wy);
     render();
     return;
   }
@@ -1795,7 +1882,7 @@ canvas.addEventListener('contextmenu', e => {
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
   const hit = booths.hitTest(wx, wy, renderer.scale);
   if (hit) {
-    if (confirm(`删除此${hit.type === 'booth' ? '帐篷' : hit.type === 'guard' ? '安保点' : hit.type === 'arrow' ? '动线' : hit.type === 'zone' ? '功能区' : hit.type}？`)) {
+    if (confirm(`删除此${hit.type === 'booth' ? '帐篷' : hit.type === 'guard' ? '安保点' : hit.type === 'fire' ? '灭火器' : hit.type === 'arrow' ? '动线' : hit.type === 'zone' ? '功能区' : hit.type}？`)) {
       booths.deleteItem(hit.id);
       hideProps();
       render();
@@ -1991,9 +2078,17 @@ function showProps(item) {
       <button class="del-btn" onclick="deleteItemAndRender(${item.id})">删除</button>`;
 
   } else if (item.type === 'zone') {
+    const fs = item.fontSize || 14;
     content.innerHTML = `
       <div class="prop-row"><label>文字内容</label>
         <input value="${item.label}" onchange="updateItem(${item.id},'label',this.value)">
+      </div>
+      <div class="prop-row"><label>字体大小</label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input type="range" min="8" max="60" step="1" value="${fs}" style="flex:1"
+            oninput="updateItem(${item.id},'fontSize',+this.value);this.nextElementSibling.textContent=this.value+'px'">
+          <span style="font-size:12px;min-width:36px">${fs}px</span>
+        </div>
       </div>
       <button class="del-btn" onclick="deleteItemAndRender(${item.id})">删除</button>`;
 
@@ -2034,7 +2129,7 @@ window.deleteItemAndRender = function(id) {
 function updateStats() {
   const s = booths.getStats();
   const el = document.getElementById('stats-content');
-  if (s.total === 0 && s.guards === 0) {
+  if (s.total === 0 && s.guards === 0 && s.fires === 0) {
     el.innerHTML = '<div class="stat-row" style="color:var(--text3);font-style:italic">暂无标注</div>';
     return;
   }
@@ -2045,6 +2140,7 @@ function updateStats() {
     html += `<div class="stat-row"><span style="color:${color}">${cat}</span><span class="num" style="color:${color}">${n}</span></div>`;
   });
   html += `<div class="stat-row" style="margin-top:4px"><span>安保点</span><span class="num">${s.guards}</span></div>`;
+  html += `<div class="stat-row"><span>灭火器</span><span class="num">${s.fires}</span></div>`;
   el.innerHTML = html;
 }
 
@@ -2255,19 +2351,44 @@ function batchNumber() {
     return;
   }
 
-  // Sort along the row direction: project centers onto the dominant angle axis
-  // Use the average angle of all items to determine the row direction
-  const avgAngle = items.reduce((s, i) => s + (i.angle || 0), 0) / items.length;
-  const rad = avgAngle * Math.PI / 180;
-  const dirX = Math.cos(rad), dirY = Math.sin(rad);
-  // Project each item's center onto this direction
-  items.sort((a, b) => {
-    const acx = a.wx + a.ww / 2, acy = a.wy + a.wh / 2;
-    const bcx = b.wx + b.ww / 2, bcy = b.wy + b.wh / 2;
-    const projA = acx * dirX + acy * dirY;
-    const projB = bcx * dirX + bcy * dirY;
-    return projA - projB;
-  });
+  // Snake-order sorting: top-to-bottom rows, alternating left-right direction
+  // 1. Compute center Y for each item
+  const centers = items.map(item => ({
+    item,
+    cx: item.wx + item.ww / 2,
+    cy: item.wy + item.wh / 2
+  }));
+
+  // 2. Cluster into rows by Y position
+  const avgShortSide = items.reduce((s, i) => s + Math.min(i.ww, i.wh), 0) / items.length;
+  const rowThreshold = avgShortSide * 0.7;
+  centers.sort((a, b) => a.cy - b.cy);
+
+  const rows = [];
+  let currentRow = [centers[0]];
+  for (let i = 1; i < centers.length; i++) {
+    // Compare to running average Y of current row
+    const rowAvgY = currentRow.reduce((s, c) => s + c.cy, 0) / currentRow.length;
+    if (Math.abs(centers[i].cy - rowAvgY) < rowThreshold) {
+      currentRow.push(centers[i]);
+    } else {
+      rows.push(currentRow);
+      currentRow = [centers[i]];
+    }
+  }
+  rows.push(currentRow);
+
+  // 3. Reverse rows so numbering starts from top
+  rows.reverse();
+
+  // 4. Sort each row by X, alternating direction (snake/boustrophedon)
+  items = [];
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    row.sort((a, b) => a.cx - b.cx);
+    if (r % 2 === 1) row.reverse();
+    for (const c of row) items.push(c.item);
+  }
 
   _batchItems = items;
 
@@ -2318,9 +2439,20 @@ function confirmBatchNumber() {
   document.getElementById('tool-hint').textContent = '批量编号已完成';
 }
 
+function clearBatchNumber() {
+  if (_batchItems.length === 0) return;
+  const catName = _batchItems[0].cat;
+  _batchItems.forEach(item => { item.label = ''; });
+  document.getElementById('batch-overlay').style.display = 'none';
+  _batchItems = [];
+  render();
+  document.getElementById('tool-hint').textContent = `已清除「${catName}」的编号`;
+}
+
 window.batchNumber = batchNumber;
 window.cancelBatchNumber = cancelBatchNumber;
 window.confirmBatchNumber = confirmBatchNumber;
+window.clearBatchNumber = clearBatchNumber;
 
 // ── LEGEND / CATEGORY MANAGEMENT ─────────────────────────────────────────────
 function renderLegend() {

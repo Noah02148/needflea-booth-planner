@@ -83,6 +83,12 @@ class BoothSystem {
     return item;
   }
 
+  addFire(worldX, worldY) {
+    const item = { id: this.nextId++, type: 'fire', wx: worldX, wy: worldY };
+    this.items.push(item);
+    return item;
+  }
+
   addArrow(wx1, wy1, wx2, wy2) {
     const item = { id: this.nextId++, type: 'arrow', wx1, wy1, wx2, wy2 };
     this.items.push(item);
@@ -149,7 +155,7 @@ class BoothSystem {
       return lx >= -item.ww/2 - TOL && lx <= item.ww/2 + TOL &&
              ly >= -item.wh/2 - TOL && ly <= item.wh/2 + TOL;
     }
-    if (item.type === 'guard') {
+    if (item.type === 'guard' || item.type === 'fire') {
       return Math.hypot(wx - item.wx, wy - item.wy) < TOL * 3;
     }
     if (item.type === 'arrow') {
@@ -258,6 +264,22 @@ class BoothSystem {
       }
       ctx.restore();
 
+    } else if (item.type === 'fire') {
+      const sx = R.wx(item.wx), sy = R.wy(item.wy);
+      ctx.save();
+      ctx.font = '20px serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('🧯', sx, sy);
+      if (sel) {
+        ctx.strokeStyle = '#E85B5B';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.arc(sx, sy, 16, 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+
     } else if (item.type === 'arrow') {
       const sx1 = R.wx(item.wx1), sy1 = R.wy(item.wy1);
       const sx2 = R.wx(item.wx2), sy2 = R.wy(item.wy2);
@@ -325,7 +347,7 @@ class BoothSystem {
       const sx = R.wx(item.wx), sy = R.wy(item.wy);
       const isDark = typeof darkMode !== 'undefined' && darkMode;
       ctx.save();
-      const fontSize = 14;
+      const fontSize = item.fontSize || 14;
       ctx.font = `bold ${fontSize}px 'PingFang SC', sans-serif`;
       ctx.fillStyle = isDark ? '#ffffff' : '#1a1a18';
       ctx.textAlign = 'center';
@@ -387,7 +409,7 @@ class BoothSystem {
     const booths = this.items.filter(i => i.type === 'booth');
     const counts = {};
     booths.forEach(b => { counts[b.cat] = (counts[b.cat] || 0) + 1; });
-    return { total: booths.length, guards: this.items.filter(i => i.type === 'guard').length, counts };
+    return { total: booths.length, guards: this.items.filter(i => i.type === 'guard').length, fires: this.items.filter(i => i.type === 'fire').length, counts };
   }
 
   // ── HELPERS ───────────────────────────────────────────────
