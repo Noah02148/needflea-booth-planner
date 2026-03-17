@@ -1314,12 +1314,11 @@ async function loadDWGFile(file) {
           parsed = true;
         } catch (odaErr) {
           console.error('ODA fallback failed:', odaErr);
-          alert('ODA 转换失败: ' + (odaErr.message || odaErr));
         }
       }
 
       if (!parsed) {
-        alert('DWG 文件处理失败：浏览器解析器和 ODA 转换器均无法处理此文件。\n请确保 DWG 转换服务器正在运行（端口 3001）。');
+        alert('解析 DWG 文件失败，请转化成 DXF 格式上传或联系开发者');
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
