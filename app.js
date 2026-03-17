@@ -2308,21 +2308,40 @@ function loadProject(input) {
         const ext = (data.cadFile.name || '').split('.').pop().toLowerCase();
 
         if (ext === 'dwg') {
-          // Parse DWG
+          // Parse DWG: try libdxfrw first, then ODA fallback
           const ab = bytes.buffer;
-          const result = await parseDWGtoSVG(ab);
-          if (result.metersPerUnit) metersPerUnit = result.metersPerUnit;
-          const blob = new Blob([result.svgString], { type: 'image/svg+xml;charset=utf-8' });
-          const url = URL.createObjectURL(blob);
-          await new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => { URL.revokeObjectURL(url); renderer.loadSvgBackground(img, result.bounds); resolve(); };
-            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG 渲染失败')); };
-            img.src = url;
-          });
-          dxfLoaded = true;
-          document.getElementById('welcome').classList.add('hidden');
-          document.getElementById('btn-calib').disabled = false;
+          let dwgLoaded = false;
+          try {
+            const result = await parseDWGtoSVG(ab);
+            if (result.metersPerUnit) metersPerUnit = result.metersPerUnit;
+            const blob = new Blob([result.svgString], { type: 'image/svg+xml;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            await new Promise((resolve, reject) => {
+              const img = new Image();
+              img.onload = () => { URL.revokeObjectURL(url); renderer.loadSvgBackground(img, result.bounds); resolve(); };
+              img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG fail')); };
+              img.src = url;
+            });
+            dwgLoaded = true;
+          } catch (e) {
+            console.warn('Project DWG libdxfrw failed:', e);
+          }
+          if (!dwgLoaded) {
+            try {
+              const dxfText = await convertDWGtoDXF(ab, data.cadFile.name);
+              const dxfData = parser.parse(dxfText);
+              renderer.load(dxfData);
+              dwgLoaded = true;
+            } catch (e2) {
+              console.warn('Project DWG ODA failed:', e2);
+              alert('底图 DWG 加载失败，标注数据已恢复。\n请手动重新导入 CAD 文件。');
+            }
+          }
+          if (dwgLoaded) {
+            dxfLoaded = true;
+            document.getElementById('welcome').classList.add('hidden');
+            document.getElementById('btn-calib').disabled = false;
+          }
         } else {
           // Parse DXF
           const content = new TextDecoder().decode(bytes);
