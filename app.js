@@ -2410,8 +2410,10 @@ function batchNumber() {
   // If single selected, use all booths of that category
   // If nothing selected, use all booths of active category
   let items = [];
+  let manualSelection = false;
   if (booths.selectedIds.size > 1) {
     items = [...booths.selectedIds].map(id => booths.getItem(id)).filter(i => i && i.type === 'booth');
+    manualSelection = true; // preserve user's selection order
   } else {
     // Find category: from selected booth or active picker
     let cat = activeCat;
@@ -2426,43 +2428,47 @@ function batchNumber() {
     return;
   }
 
-  // Snake-order sorting: top-to-bottom rows, alternating left-right direction
-  // 1. Compute center Y for each item
-  const centers = items.map(item => ({
-    item,
-    cx: item.wx + item.ww / 2,
-    cy: item.wy + item.wh / 2
-  }));
+  // If manually multi-selected, use selection order as-is;
+  // otherwise apply snake-order sorting
+  if (!manualSelection) {
+    // Snake-order sorting: top-to-bottom rows, alternating left-right direction
+    // 1. Compute center Y for each item
+    const centers = items.map(item => ({
+      item,
+      cx: item.wx + item.ww / 2,
+      cy: item.wy + item.wh / 2
+    }));
 
-  // 2. Cluster into rows by Y position
-  const avgShortSide = items.reduce((s, i) => s + Math.min(i.ww, i.wh), 0) / items.length;
-  const rowThreshold = avgShortSide * 0.7;
-  centers.sort((a, b) => a.cy - b.cy);
+    // 2. Cluster into rows by Y position
+    const avgShortSide = items.reduce((s, i) => s + Math.min(i.ww, i.wh), 0) / items.length;
+    const rowThreshold = avgShortSide * 0.7;
+    centers.sort((a, b) => a.cy - b.cy);
 
-  const rows = [];
-  let currentRow = [centers[0]];
-  for (let i = 1; i < centers.length; i++) {
-    // Compare to running average Y of current row
-    const rowAvgY = currentRow.reduce((s, c) => s + c.cy, 0) / currentRow.length;
-    if (Math.abs(centers[i].cy - rowAvgY) < rowThreshold) {
-      currentRow.push(centers[i]);
-    } else {
-      rows.push(currentRow);
-      currentRow = [centers[i]];
+    const rows = [];
+    let currentRow = [centers[0]];
+    for (let i = 1; i < centers.length; i++) {
+      // Compare to running average Y of current row
+      const rowAvgY = currentRow.reduce((s, c) => s + c.cy, 0) / currentRow.length;
+      if (Math.abs(centers[i].cy - rowAvgY) < rowThreshold) {
+        currentRow.push(centers[i]);
+      } else {
+        rows.push(currentRow);
+        currentRow = [centers[i]];
+      }
     }
-  }
-  rows.push(currentRow);
+    rows.push(currentRow);
 
-  // 3. Reverse rows so numbering starts from top
-  rows.reverse();
+    // 3. Reverse rows so numbering starts from top
+    rows.reverse();
 
-  // 4. Sort each row by X, alternating direction (snake/boustrophedon)
-  items = [];
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r];
-    row.sort((a, b) => a.cx - b.cx);
-    if (r % 2 === 1) row.reverse();
-    for (const c of row) items.push(c.item);
+    // 4. Sort each row by X, alternating direction (snake/boustrophedon)
+    items = [];
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      row.sort((a, b) => a.cx - b.cx);
+      if (r % 2 === 1) row.reverse();
+      for (const c of row) items.push(c.item);
+    }
   }
 
   _batchItems = items;
@@ -2476,7 +2482,9 @@ function batchNumber() {
 
   // Info & preview
   const catName = items[0].cat;
-  document.getElementById('batch-info').textContent = `将为 ${items.length} 个「${catName}」帐篷编号`;
+  document.getElementById('batch-info').textContent = manualSelection
+    ? `将按选中顺序为 ${items.length} 个帐篷编号`
+    : `将为 ${items.length} 个「${catName}」帐篷编号`;
   _updateBatchPreview();
 
   // Show dialog
