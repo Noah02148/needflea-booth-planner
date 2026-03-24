@@ -79,13 +79,15 @@
   /* ── CALIBRATION OVERLAY ── */
   #calib-overlay {
     display: none; position: absolute; inset: 0;
-    background: rgba(0,0,0,0.55); z-index: 50;
-    align-items: center; justify-content: center;
+    z-index: 50; pointer-events: none;
+    align-items: flex-end; justify-content: center;
+    padding-bottom: 40px;
   }
   #calib-overlay.show { display: flex; }
   #calib-box {
     background: var(--bg2); border-radius: 12px; padding: 24px 28px;
     width: 340px; box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    pointer-events: auto;
   }
   #calib-box h3 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
   #calib-box p { font-size: 12px; color: var(--text2); margin-bottom: 16px; line-height: 1.6; }
@@ -192,9 +194,9 @@
   <div class="logo">NEED!<span>FLEA</span></div>
   <div class="tb-sep"></div>
   <button class="tb-btn" onclick="document.getElementById('file-input').click()">
-    📂 导入 DXF/DWG
+    📂 导入底图
   </button>
-  <input type="file" id="file-input" accept=".dxf,.DXF,.dwg,.DWG" onchange="loadCADFile(this)">
+  <input type="file" id="file-input" accept=".dxf,.DXF,.dwg,.DWG,.jpg,.jpeg,.png,.webp,.bmp" onchange="loadCADFile(this)">
   <button class="tb-btn" id="btn-calib" onclick="startCalib()" disabled>
     📐 定比例尺
   </button>
@@ -257,10 +259,10 @@
     <!-- WELCOME -->
     <div id="welcome">
       <div class="icon">📐</div>
-      <h2>拖入 DXF/DWG 文件开始</h2>
-      <p>或点击左上角「导入 DXF/DWG」按钮</p>
+      <h2>拖入 DXF/DWG 或场景图片开始</h2>
+      <p>或点击左上角「导入底图」按钮（支持 DXF/DWG/JPG/PNG）</p>
     </div>
-    <div id="drop-hint">松开鼠标导入 DXF/DWG</div>
+    <div id="drop-hint">松开鼠标导入文件</div>
 
     <!-- CALIBRATION OVERLAY -->
     <div id="calib-overlay">
@@ -345,7 +347,7 @@
 
 <!-- STATUS BAR -->
 <div id="statusbar">
-  <span id="tool-hint" class="hi">拖入 DXF/DWG 文件或点击「导入 DXF/DWG」</span>
+  <span id="tool-hint" class="hi">拖入 DXF/DWG 或图片，或点击「导入底图」</span>
   <span>|</span>
   <span id="scale-info">比例尺未设定</span>
   <span>|</span>

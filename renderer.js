@@ -17,6 +17,11 @@ class DXFRenderer {
     this.svgBounds = null;      // { minX, minY, maxX, maxY } in world coordinates
     this.useSvgBackground = false;
 
+    // Raster image background mode (scene photo)
+    this.bgImage = null;
+    this.imageBounds = null;
+    this.useImageBackground = false;
+
     // Viewport transform
     this.offsetX = 0;
     this.offsetY = 0;
@@ -48,6 +53,30 @@ class DXFRenderer {
     this.svgImage = null;
     this.svgBounds = null;
     this.useSvgBackground = false;
+    this.bgImage = null;
+    this.imageBounds = null;
+    this.useImageBackground = false;
+    this.fitToView();
+  }
+
+  /**
+   * Load a raster image (photo) as background for scene-based planning.
+   * World coordinates = image pixels (origin at bottom-left to match DXF convention).
+   * @param {Image} img - loaded Image object
+   */
+  loadImageBackground(img) {
+    this.bgImage = img;
+    this.svgImage = null;
+    this.svgBounds = null;
+    this.useSvgBackground = false;
+    this.useImageBackground = true;
+    const w = img.naturalWidth, h = img.naturalHeight;
+    this.imageBounds = { minX: 0, minY: 0, maxX: w, maxY: h };
+    this.dxfData = {
+      entities: [],
+      layers: {},
+      bounds: { minX: 0, minY: 0, maxX: w, maxY: h, width: w, height: h }
+    };
     this.fitToView();
   }
 
@@ -122,7 +151,10 @@ class DXFRenderer {
 
     ctx.save();
 
-    if (this.useSvgBackground && this.svgImage && this.svgBounds) {
+    if (this.useImageBackground && this.bgImage && this.imageBounds) {
+      // Draw raster image background (scene photo)
+      this._drawImageBackground();
+    } else if (this.useSvgBackground && this.svgImage && this.svgBounds) {
       // Draw SVG as background image, mapped to world coordinates
       this._drawSvgBackground();
     } else {
@@ -131,6 +163,16 @@ class DXFRenderer {
     }
 
     ctx.restore();
+  }
+
+  _drawImageBackground() {
+    const ctx = this.ctx;
+    const b = this.imageBounds;
+    const screenX = this.wx(b.minX);
+    const screenY = this.wy(b.maxY);
+    const screenW = (b.maxX - b.minX) * this.scale;
+    const screenH = (b.maxY - b.minY) * this.scale;
+    ctx.drawImage(this.bgImage, screenX, screenY, screenW, screenH);
   }
 
   _drawSvgBackground() {

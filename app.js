@@ -1339,6 +1339,13 @@ function loadCADFile(input) {
   if (!file) return;
   const ext = getFileExtension(file.name);
 
+  // Image files (scene photos)
+  if (/^(jpg|jpeg|png|webp|bmp)$/.test(ext)) {
+    loadImageFile(file);
+    input.value = '';
+    return;
+  }
+
   if (ext === 'dwg') {
     loadDWGFile(file);
   } else {
@@ -1367,6 +1374,31 @@ function loadCADFile(input) {
   input.value = '';
 }
 
+function loadImageFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    // Store raw file for project save
+    const base64 = e.target.result.split(',')[1];
+    _cadFileData = { name: file.name, base64, isImage: true };
+
+    const img = new Image();
+    img.onload = () => {
+      renderer.loadImageBackground(img);
+      dxfLoaded = true;
+      metersPerUnit = null;
+      updateScaleInfo();
+      document.getElementById('welcome').classList.add('hidden');
+      document.getElementById('btn-calib').disabled = false;
+      setTool('select');
+      render();
+      document.getElementById('tool-hint').textContent = '场景图片已加载 — 请先用「📐 定比例尺」设定比例';
+    };
+    img.onerror = () => alert('图片加载失败');
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
 // Keep backward compatibility
 function loadDXF(input) { loadCADFile(input); }
 
@@ -1382,10 +1414,10 @@ wrap.addEventListener('drop', e => {
   e.preventDefault();
   dropHint.classList.remove('show');
   const file = e.dataTransfer.files[0];
-  if (file && /\.(dxf|dwg)$/i.test(file.name)) {
+  if (file && /\.(dxf|dwg|jpe?g|png|webp|bmp)$/i.test(file.name)) {
     loadCADFile({ files: [file] });
   } else {
-    alert('请拖入 .dxf 或 .dwg 文件');
+    alert('请拖入 DXF/DWG 文件或图片（JPG/PNG）');
   }
 });
 
@@ -2307,6 +2339,24 @@ function loadProject(input) {
       // Restore CAD file first (if included)
       if (data.cadFile && data.cadFile.base64) {
         _cadFileData = data.cadFile;
+
+        // Image background mode
+        if (data.cadFile.isImage) {
+          const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', bmp: 'image/bmp' };
+          const imgExt = (data.cadFile.name || '').split('.').pop().toLowerCase();
+          const mime = mimeMap[imgExt] || 'image/png';
+          const dataUrl = `data:${mime};base64,${data.cadFile.base64}`;
+          await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => { renderer.loadImageBackground(img); resolve(); };
+            img.onerror = () => { reject(new Error('Image load fail')); };
+            img.src = dataUrl;
+          });
+          dxfLoaded = true;
+          document.getElementById('welcome').classList.add('hidden');
+          document.getElementById('btn-calib').disabled = false;
+        } else {
+
         const binary = atob(data.cadFile.base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -2356,6 +2406,7 @@ function loadProject(input) {
           document.getElementById('welcome').classList.add('hidden');
           document.getElementById('btn-calib').disabled = false;
         }
+      } // end else (non-image CAD files)
       }
 
       // Restore categories
