@@ -31,7 +31,8 @@ class BoothSystem {
       wx: worldX - w / 2,  // top-left in world coords
       wy: worldY - h / 2,
       ww: w, wh: h,
-      label: '', angle: 0
+      label: '', angle: 0,
+      boothStyle: 'tent'   // 'tent' = 帐篷, 'table' = 空地+桌椅
     };
     this.items.push(item);
     return item;
@@ -208,14 +209,42 @@ class BoothSystem {
       ctx.translate(cx, cy);
       ctx.rotate(-angle); // screen Y is flipped
 
+      const isTable = item.boothStyle === 'table';
+
       if (sel) { ctx.shadowColor = col.fill + '99'; ctx.shadowBlur = 10; }
 
-      // Solid fill
-      ctx.fillStyle = hasOverlap ? '#FF4444' : col.fill;
-      ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
-      ctx.lineWidth = sel ? 2.5 : 1.2;
-      this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
-      ctx.fill(); ctx.stroke();
+      if (isTable) {
+        // 空地: light fill + dashed border + diagonal hatching
+        ctx.fillStyle = hasOverlap ? '#FF444430' : col.fill + '30';
+        ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
+        ctx.lineWidth = sel ? 2.5 : 1.2;
+        ctx.setLineDash([6, 4]);
+        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
+        ctx.fill(); ctx.stroke();
+        ctx.setLineDash([]);
+        // Diagonal lines
+        ctx.save();
+        ctx.beginPath();
+        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
+        ctx.clip();
+        ctx.strokeStyle = hasOverlap ? '#CC000040' : col.fill + '50';
+        ctx.lineWidth = 1;
+        const step = Math.max(6, Math.min(12, sw * 0.12));
+        for (let d = -sw - sh; d < sw + sh; d += step) {
+          ctx.beginPath();
+          ctx.moveTo(-sw/2 + d, -sh/2);
+          ctx.lineTo(-sw/2 + d + sh, sh/2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      } else {
+        // 帐篷: solid fill
+        ctx.fillStyle = hasOverlap ? '#FF4444' : col.fill;
+        ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
+        ctx.lineWidth = sel ? 2.5 : 1.2;
+        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
+        ctx.fill(); ctx.stroke();
+      }
       ctx.shadowBlur = 0;
 
       // Label (only if user set one) — always upright
@@ -224,7 +253,7 @@ class BoothSystem {
         ctx.rotate(angle); // counter-rotate so text stays upright
         const fontSize = Math.max(8, Math.min(sw * 0.3, sh * 0.35, 16));
         ctx.font = `bold ${fontSize}px 'PingFang SC', sans-serif`;
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
+        ctx.fillStyle = isTable ? (hasOverlap ? '#CC0000' : col.stroke) : 'rgba(255,255,255,0.85)';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(item.label, 0, 0);

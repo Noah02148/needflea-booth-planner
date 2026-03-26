@@ -94,6 +94,10 @@ let erasing = false;
 // Theme
 let darkMode = true;
 
+// 3D isometric view
+let _isoRenderer = null;
+let _3dMode = false;
+
 // Raw CAD file data for saving
 let _cadFileData = null; // { name, base64 }
 
@@ -111,6 +115,10 @@ new ResizeObserver(resize).observe(wrap);
 
 // ── RENDER ───────────────────────────────────────────────────────────────────
 function render() {
+  if (_3dMode && _isoRenderer) {
+    _isoRenderer.render(booths, metersPerUnit, darkMode);
+    return;
+  }
   renderer.render();
   booths.draw(ctx, renderer);
   // Draw eraser marks (cover with background color)
@@ -1515,6 +1523,7 @@ function metersToDXF(m) {
 
 // ── MOUSE EVENTS ─────────────────────────────────────────────────────────────
 canvas.addEventListener('mousedown', e => {
+  if (_3dMode) return; // 3D mode handles its own events
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
 
   // Middle mouse or space+drag = pan
@@ -1746,6 +1755,7 @@ canvas.addEventListener('mousedown', e => {
 });
 
 canvas.addEventListener('mousemove', e => {
+  if (_3dMode) return;
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
   document.getElementById('coord-info').textContent =
     metersPerUnit ? `${(wx * metersPerUnit).toFixed(1)}m, ${(wy * metersPerUnit).toFixed(1)}m`
@@ -1930,6 +1940,7 @@ canvas.addEventListener('mousemove', e => {
 });
 
 canvas.addEventListener('mouseup', e => {
+  if (_3dMode) return;
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
 
 
@@ -1979,6 +1990,7 @@ canvas.addEventListener('contextmenu', e => {
 });
 
 canvas.addEventListener('wheel', e => {
+  if (_3dMode) return; // let iso-renderer handle zoom
   e.preventDefault();
   if (tool === 'eraser') {
     // Adjust brush size
@@ -2136,6 +2148,27 @@ function showProps(item) {
   const content = document.getElementById('prop-content');
   panel.style.display = 'block';
 
+  // Multi-select: batch controls
+  const selBooths = [...booths.selectedIds].map(id => booths.getItem(id)).filter(i => i && i.type === 'booth');
+  if (selBooths.length > 1) {
+    const CAT_OPTS_B = Object.keys(booths.CAT_COLORS).map(c => `<option value="${c}">${c}</option>`).join('');
+    const styleOptsB = [['tent','帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    const sizes = ['2x2','2x4','3x3','1x1'];
+    const sizeOptsB = sizes.map(s => `<option value="${s}">${s}m</option>`).join('');
+    content.innerHTML = `
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">已选 ${selBooths.length} 个摊位</div>
+      <div class="prop-row"><label>批量类型</label>
+        <select onchange="batchUpdateBooths('cat',this.value)"><option value="">—</option>${CAT_OPTS_B}</select>
+      </div>
+      <div class="prop-row"><label>批量搭建</label>
+        <select onchange="batchUpdateBooths('boothStyle',this.value)"><option value="">—</option>${styleOptsB}</select>
+      </div>
+      <div class="prop-row"><label>批量尺寸</label>
+        <select onchange="batchResizeBooths(this.value)"><option value="">—</option>${sizeOptsB}</select>
+      </div>`;
+    return;
+  }
+
   const CAT_OPTS = Object.keys(booths.CAT_COLORS).map(c =>
     `<option value="${c}" ${c === item.cat ? 'selected' : ''}>${c}</option>`
   ).join('');
@@ -2143,9 +2176,14 @@ function showProps(item) {
   if (item.type === 'booth') {
     const sizes = ['2x2','2x4','3x3','1x1'];
     const sizeOpts = sizes.map(s => `<option value="${s}" ${s === item.size ? 'selected' : ''}>${s}m</option>`).join('');
+    const bStyle = item.boothStyle || 'tent';
+    const styleOpts = [['tent','帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
     content.innerHTML = `
       <div class="prop-row"><label>摊位类型</label>
         <select onchange="updateItem(${item.id},'cat',this.value)">${CAT_OPTS}</select>
+      </div>
+      <div class="prop-row"><label>搭建方式</label>
+        <select onchange="updateItem(${item.id},'boothStyle',this.value)">${styleOpts}</select>
       </div>
       <div class="prop-row"><label>帐篷尺寸</label>
         <select onchange="resizeBooth(${item.id},this.value)">${sizeOpts}</select>
@@ -2193,6 +2231,28 @@ window.updateItem = function(id, key, val) {
   booths.updateItem(id, { [key]: val });
   const item = booths.getItem(id);
   if (item) showProps(item);
+  render();
+};
+
+window.batchUpdateBooths = function(key, val) {
+  if (!val) return;
+  for (const id of booths.selectedIds) {
+    const item = booths.getItem(id);
+    if (item && item.type === 'booth') booths.updateItem(id, { [key]: val });
+  }
+  render();
+};
+
+window.batchResizeBooths = function(size) {
+  if (!size) return;
+  const [mw, mh] = size.split('x').map(Number);
+  const ww = metersToDXF(mw), wh = metersToDXF(mh);
+  for (const id of booths.selectedIds) {
+    const item = booths.getItem(id);
+    if (!item || item.type !== 'booth') continue;
+    const cx = item.wx + item.ww / 2, cy = item.wy + item.wh / 2;
+    booths.updateItem(id, { size, ww, wh, wx: cx - ww / 2, wy: cy - wh / 2 });
+  }
   render();
 };
 
@@ -2711,6 +2771,33 @@ window.clearAnnotations = clearAnnotations;
 window.toggleLayer = toggleLayer;
 window.toggleLayerByIdx = toggleLayerByIdx;
 window.setAllLayersVisible = setAllLayersVisible;
+
+// ── 3D ISOMETRIC VIEW ───────────────────────────────────────────────────────
+window.toggle3DView = function() {
+  _3dMode = !_3dMode;
+  const btn = document.getElementById('btn-3d');
+  if (_3dMode) {
+    btn.style.background = 'var(--green)';
+    btn.style.color = '#fff';
+    if (!_isoRenderer) {
+      _isoRenderer = new IsoRenderer(canvas);
+      _isoRenderer._renderCb = () => _isoRenderer.render(booths, metersPerUnit, darkMode);
+      _isoRenderer._bindEvents();
+    }
+    _isoRenderer.active = true;
+    _isoRenderer.render(booths, metersPerUnit, darkMode);
+  } else {
+    btn.style.background = '';
+    btn.style.color = '';
+    if (_isoRenderer) _isoRenderer.active = false;
+    render();
+  }
+};
+
+window.export3DPNG = function() {
+  if (!_isoRenderer) _isoRenderer = new IsoRenderer(canvas);
+  _isoRenderer.exportPNG(booths, metersPerUnit, darkMode);
+};
 
 // ── INIT ─────────────────────────────────────────────────────────────────────
 resize();
