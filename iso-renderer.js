@@ -38,18 +38,38 @@ class IsoRenderer {
 
     this._onDown = (e) => {
       if (!this.active) return;
-      this._dragging = true;
-      this._dragStartX = e.clientX || (e.touches && e.touches[0].clientX) || 0;
-      this._dragStartRot = this.rotation;
+      const cx = e.clientX || (e.touches && e.touches[0].clientX) || 0;
+      const cy = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      if (e.altKey) {
+        // Option+drag = pan
+        this._panning = true;
+        this._panStartX = cx;
+        this._panStartY = cy;
+        this._panStartOX = this._panOffsetX || 0;
+        this._panStartOY = this._panOffsetY || 0;
+        e.preventDefault();
+      } else {
+        // Regular drag = rotate
+        this._dragging = true;
+        this._dragStartX = cx;
+        this._dragStartRot = this.rotation;
+      }
     };
     this._onMove = (e) => {
-      if (!this.active || !this._dragging) return;
-      const x = e.clientX || (e.touches && e.touches[0].clientX) || 0;
-      const dx = x - this._dragStartX;
-      this.rotation = this._dragStartRot + dx * 0.008;
-      if (this._renderCb) this._renderCb();
+      if (!this.active) return;
+      const cx = e.clientX || (e.touches && e.touches[0].clientX) || 0;
+      const cy = e.clientY || (e.touches && e.touches[0].clientY) || 0;
+      if (this._panning) {
+        this._panOffsetX = this._panStartOX + (cx - this._panStartX);
+        this._panOffsetY = this._panStartOY + (cy - this._panStartY);
+        if (this._renderCb) this._renderCb();
+      } else if (this._dragging) {
+        const dx = cx - this._dragStartX;
+        this.rotation = this._dragStartRot + dx * 0.008;
+        if (this._renderCb) this._renderCb();
+      }
     };
-    this._onUp = () => { this._dragging = false; };
+    this._onUp = () => { this._dragging = false; this._panning = false; };
 
     c.addEventListener('mousedown', this._onDown);
     c.addEventListener('mousemove', this._onMove);
@@ -85,7 +105,7 @@ class IsoRenderer {
     const sinT = Math.sin(this.tilt);
     const sx = (rx - ry) * cosT * this.isoScale;
     const sy = (rx + ry) * sinT * this.isoScale - z * this.isoScale;
-    return { x: sx + this.offsetX, y: sy + this.offsetY };
+    return { x: sx + this.offsetX + (this._panOffsetX || 0), y: sy + this.offsetY + (this._panOffsetY || 0) };
   }
 
   /**
@@ -140,13 +160,24 @@ class IsoRenderer {
     // Draw annotations on ground plane (behind booths)
     this._drawAnnotations(ctx, annotations, mpu, isDark, boothSystem);
 
-    // Draw booths
+    // Draw booth structures (no labels)
     items3d.forEach(item => {
       if (item.style === 'table') {
         this._drawTableBooth(ctx, item, boothSystem, isDark);
+      } else if (item.style === 'canopy') {
+        this._drawCanopy(ctx, item, boothSystem, isDark);
       } else {
         this._drawTent(ctx, item, boothSystem, isDark);
       }
+    });
+
+    // Draw all labels on top of all structures
+    items3d.forEach(item => {
+      const col = this._getColor(item, boothSystem);
+      const labelH = item.style === 'table' ? 0.5
+                   : item.style === 'canopy' ? (this.TENT_WALL_H + 0.35 + 0.3)
+                   : (this.TENT_WALL_H + 0.4);
+      this._drawBoothLabel(ctx, item, col, isDark, labelH);
     });
 
     // HUD
@@ -441,16 +472,111 @@ class IsoRenderer {
       });
     });
 
-    // Category color indicator: small colored label bar at top front
-    const frontMid = this.toScreen(item.mx, item.my + hh, zTop + 0.05);
-    const barW = Math.min(30, item.mw * this.isoScale * 0.3);
-    ctx.fillStyle = col.fill;
-    ctx.globalAlpha = 0.85;
-    this._roundRectPath(ctx, frontMid.x - barW, frontMid.y - 4, barW * 2, 8, 3);
-    ctx.fill();
-    ctx.globalAlpha = 1.0;
+  }
 
-    this._drawBoothLabel(ctx, item, isDark, zTop + 0.4);
+  _drawCanopy(ctx, item, boothSystem, isDark) {
+    const col = this._getColor(item, boothSystem);
+    const hw = item.mw / 2, hh = item.mh / 2;
+    const H = this.TENT_WALL_H;       // eave height ~2m
+    const peakH = H + 0.35;           // slight center peak
+
+    const at = (dx, dy, z) => this.toScreen(item.mx + dx, item.my + dy, z);
+
+    // Corner positions
+    const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+
+    // Sort corners by depth for correct draw order
+    const cos = Math.cos(this.rotation), sin = Math.sin(this.rotation);
+    const cornersSorted = corners.map(([dx,dy], i) => ({
+      dx, dy, i,
+      depth: (item.mx+dx)*sin + (item.my+dy)*cos
+    })).sort((a,b) => a.depth - b.depth);
+
+    // --- Draw legs (thin poles) ---
+    const legW = Math.max(1.8, 0.025 * this.isoScale);
+    const legColor = isDark ? '#b0b0a0' : '#888878';
+    const legShadow = isDark ? '#787870' : '#606058';
+    const legHighlight = isDark ? '#d0d0c0' : '#aaa898';
+
+    cornersSorted.forEach(({dx, dy}) => {
+      const pBot = at(dx, dy, 0);
+      const pTop = at(dx, dy, H);
+      ctx.save();
+      ctx.lineCap = 'round';
+      // Shadow
+      ctx.strokeStyle = legShadow;
+      ctx.lineWidth = legW + 1;
+      ctx.beginPath(); ctx.moveTo(pBot.x, pBot.y); ctx.lineTo(pTop.x, pTop.y); ctx.stroke();
+      // Main
+      ctx.strokeStyle = legColor;
+      ctx.lineWidth = legW;
+      ctx.beginPath(); ctx.moveTo(pBot.x, pBot.y); ctx.lineTo(pTop.x, pTop.y); ctx.stroke();
+      // Highlight
+      const dx2 = pTop.x - pBot.x, dy2 = pTop.y - pBot.y;
+      const len = Math.hypot(dx2, dy2);
+      if (len > 1) {
+        const nx = -dy2/len * legW * 0.25, ny = dx2/len * legW * 0.25;
+        ctx.strokeStyle = legHighlight;
+        ctx.lineWidth = legW * 0.35;
+        ctx.beginPath(); ctx.moveTo(pBot.x+nx, pBot.y+ny); ctx.lineTo(pTop.x+nx, pTop.y+ny); ctx.stroke();
+      }
+      ctx.restore();
+    });
+
+    // --- Draw roof canopy ---
+    // Roof is composed of 4 triangular panels from each edge to center peak
+    const peak = at(0, 0, peakH);
+    const roofCorners = corners.map(([dx,dy]) => at(dx, dy, H));
+
+    // Build 4 triangular roof faces and sort by depth
+    const faces = [];
+    for (let i = 0; i < 4; i++) {
+      const c1 = corners[i], c2 = corners[(i+1)%4];
+      const midDepth = ((item.mx+c1[0])*sin + (item.my+c1[1])*cos +
+                        (item.mx+c2[0])*sin + (item.my+c2[1])*cos +
+                        item.mx*sin + item.my*cos) / 3;
+      faces.push({ i, c1, c2, depth: midDepth });
+    }
+    faces.sort((a,b) => a.depth - b.depth);
+
+    // Canvas color for roof fabric
+    const roofFill = isDark ? 'rgba(220,215,200,0.55)' : 'rgba(245,240,225,0.65)';
+    const roofStroke = isDark ? 'rgba(180,175,160,0.7)' : 'rgba(200,195,180,0.8)';
+    const roofEdge = isDark ? 'rgba(160,155,140,0.5)' : 'rgba(180,175,160,0.6)';
+
+    faces.forEach(({c1, c2}) => {
+      const p1 = at(c1[0], c1[1], H);
+      const p2 = at(c2[0], c2[1], H);
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.lineTo(peak.x, peak.y);
+      ctx.closePath();
+      ctx.fillStyle = roofFill;
+      ctx.fill();
+      ctx.strokeStyle = roofEdge;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+    });
+
+    // Roof edge outline (bottom rim of the canopy)
+    ctx.beginPath();
+    roofCorners.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.strokeStyle = roofStroke;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Cross support lines under roof (X-brace)
+    ctx.strokeStyle = isDark ? 'rgba(180,175,160,0.35)' : 'rgba(160,155,140,0.3)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(roofCorners[0].x, roofCorners[0].y);
+    ctx.lineTo(roofCorners[2].x, roofCorners[2].y);
+    ctx.moveTo(roofCorners[1].x, roofCorners[1].y);
+    ctx.lineTo(roofCorners[3].x, roofCorners[3].y);
+    ctx.stroke();
+
   }
 
   _drawTableBooth(ctx, item, boothSystem, isDark) {
@@ -470,23 +596,47 @@ class IsoRenderer {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    this._drawBoothLabel(ctx, item, isDark, 0.5);
   }
 
-  _drawBoothLabel(ctx, item, isDark, height) {
+  _drawBoothLabel(ctx, item, col, isDark, height) {
     const label = item.label || '';
     if (!label) return;
     const p = this.toScreen(item.mx, item.my, height);
     ctx.save();
-    ctx.font = 'bold 13px "PingFang SC", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    const tw = ctx.measureText(label).width + 10;
-    ctx.fillStyle = isDark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.85)';
-    this._roundRectPath(ctx, p.x - tw / 2, p.y - 18, tw, 20, 4);
+    ctx.font = 'bold 12px "PingFang SC", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+
+    const dotR = 5;
+    const gap = 5;
+    const textW = ctx.measureText(label).width;
+    const padH = 5, padV = 4;
+    const totalW = dotR * 2 + gap + textW + padH * 2;
+    const h = 18;
+    const x0 = p.x - totalW / 2;
+    const y0 = p.y - h / 2;
+
+    // Badge background
+    ctx.fillStyle = isDark ? 'rgba(0,0,0,0.75)' : 'rgba(255,255,255,0.9)';
+    this._roundRectPath(ctx, x0, y0, totalW, h, 4);
     ctx.fill();
+    // Subtle border
+    ctx.strokeStyle = col.stroke;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    // Category color dot
+    const dotX = x0 + padH + dotR;
+    const dotY = p.y;
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = col.fill;
+    ctx.fill();
+
+    // Label text
     ctx.fillStyle = isDark ? '#fff' : '#1a1a18';
-    ctx.fillText(label, p.x, p.y);
+    ctx.fillText(label, dotX + dotR + gap, dotY + 1);
+
     ctx.restore();
   }
 

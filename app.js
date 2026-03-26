@@ -15,6 +15,7 @@ const booths = new BoothSystem();
 let tool = 'select';
 let activeCat = '二手';
 let activeSize = '3x3';
+let activeBoothStyle = 'tent';
 
 // DWG layer visibility system
 let _dwgEntitiesByLayer = {};   // { layerName: [entity, ...] }
@@ -1477,7 +1478,7 @@ function setTool(t) {
   tool = t;
   const hints = {
     select: '点击选择 · Shift多选 · 拖动移动 · R/L旋转 · 右键删除',
-    booth: metersPerUnit ? '点击放置帐篷（尺寸精确）' : '点击放置帐篷（请先定比例尺以精确尺寸）',
+    booth: metersPerUnit ? '点击放置摊位（尺寸精确）' : '点击放置摊位（请先定比例尺以精确尺寸）',
     guard: '点击放置安保点位',
     fire: '点击放置灭火器',
     arrow: '拖动画动线箭头',
@@ -1502,6 +1503,11 @@ function setTool(t) {
     if (btn) btn.classList.toggle('active', id === t);
   });
   canvas.style.cursor = t === 'select' ? 'default' : 'crosshair';
+}
+
+function setBoothStyle(style) {
+  activeBoothStyle = style;
+  setTool('booth');
 }
 
 function selectCat(el) {
@@ -1634,6 +1640,7 @@ canvas.addEventListener('mousedown', e => {
     const [mw, mh] = size === 'custom' ? [3, 3] : size.split('x').map(Number);
     const ww = metersToDXF(mw), wh = metersToDXF(mh);
     const item = booths.addBooth(wx, wy, activeCat, size);
+    item.boothStyle = activeBoothStyle;
     item.ww = ww; item.wh = wh;
     item.wx = wx - ww / 2; item.wy = wy - wh / 2;
     // Snap to nearby booths on placement
@@ -2152,7 +2159,7 @@ function showProps(item) {
   const selBooths = [...booths.selectedIds].map(id => booths.getItem(id)).filter(i => i && i.type === 'booth');
   if (selBooths.length > 1) {
     const CAT_OPTS_B = Object.keys(booths.CAT_COLORS).map(c => `<option value="${c}">${c}</option>`).join('');
-    const styleOptsB = [['tent','帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    const styleOptsB = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
     const sizes = ['2x2','2x4','3x3','1x1'];
     const sizeOptsB = sizes.map(s => `<option value="${s}">${s}m</option>`).join('');
     content.innerHTML = `
@@ -2177,7 +2184,7 @@ function showProps(item) {
     const sizes = ['2x2','2x4','3x3','1x1'];
     const sizeOpts = sizes.map(s => `<option value="${s}" ${s === item.size ? 'selected' : ''}>${s}m</option>`).join('');
     const bStyle = item.boothStyle || 'tent';
-    const styleOpts = [['tent','帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
+    const styleOpts = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
     content.innerHTML = `
       <div class="prop-row"><label>摊位类型</label>
         <select onchange="updateItem(${item.id},'cat',this.value)">${CAT_OPTS}</select>

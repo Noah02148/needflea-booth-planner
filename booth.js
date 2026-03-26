@@ -209,7 +209,9 @@ class BoothSystem {
       ctx.translate(cx, cy);
       ctx.rotate(-angle); // screen Y is flipped
 
-      const isTable = item.boothStyle === 'table';
+      const bStyle = item.boothStyle || 'tent';
+      const isTable = bStyle === 'table';
+      const isCanopy = bStyle === 'canopy';
 
       if (sel) { ctx.shadowColor = col.fill + '99'; ctx.shadowBlur = 10; }
 
@@ -237,8 +239,22 @@ class BoothSystem {
           ctx.stroke();
         }
         ctx.restore();
+      } else if (isCanopy) {
+        // 四角帐篷: lighter fill with X cross lines
+        ctx.fillStyle = hasOverlap ? '#FF444480' : col.fill + '70';
+        ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
+        ctx.lineWidth = sel ? 2.5 : 1.2;
+        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
+        ctx.fill(); ctx.stroke();
+        // X cross to indicate canopy
+        ctx.strokeStyle = hasOverlap ? '#CC000060' : 'rgba(255,255,255,0.35)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(-sw/2, -sh/2); ctx.lineTo(sw/2, sh/2);
+        ctx.moveTo(sw/2, -sh/2); ctx.lineTo(-sw/2, sh/2);
+        ctx.stroke();
       } else {
-        // 帐篷: solid fill
+        // 盘扣架帐篷: solid fill
         ctx.fillStyle = hasOverlap ? '#FF4444' : col.fill;
         ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
         ctx.lineWidth = sel ? 2.5 : 1.2;
@@ -253,7 +269,7 @@ class BoothSystem {
         ctx.rotate(angle); // counter-rotate so text stays upright
         const fontSize = Math.max(8, Math.min(sw * 0.3, sh * 0.35, 16));
         ctx.font = `bold ${fontSize}px 'PingFang SC', sans-serif`;
-        ctx.fillStyle = isTable ? (hasOverlap ? '#CC0000' : col.stroke) : 'rgba(255,255,255,0.85)';
+        ctx.fillStyle = isTable ? (hasOverlap ? '#CC0000' : col.stroke) : (isCanopy ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.85)');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(item.label, 0, 0);

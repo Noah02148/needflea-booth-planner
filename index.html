@@ -43,6 +43,10 @@
     font-size: 12px; cursor: pointer; white-space: nowrap; transition: all .15s;
     display: flex; align-items: center; gap: 5px;
   }
+  select.tb-btn { appearance: none; -webkit-appearance: none; padding-right: 22px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='rgba(255,255,255,0.6)'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 8px center; }
+  select.tb-btn option { background: #2a2a2a; color: #fff; }
   .tb-btn:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.25); }
   .tb-btn.active { background: var(--green); border-color: var(--green); color: #fff; }
   .tb-btn.danger { border-color: rgba(229,74,74,0.4); color: rgba(229,74,74,0.85); }
@@ -204,7 +208,11 @@
 
   <!-- TOOL BUTTONS -->
   <button class="tb-btn active" id="btn-select" onclick="setTool('select')">▷ 选择</button>
-  <button class="tb-btn" id="btn-booth" onclick="setTool('booth')">⬜ 帐篷</button>
+  <select class="tb-btn" id="btn-booth" onchange="setBoothStyle(this.value)" onfocus="setBoothStyle(this.value)">
+    <option value="tent">⬜ 盘扣架帐篷</option>
+    <option value="canopy">⛺ 四角帐篷</option>
+    <option value="table">▦ 空地</option>
+  </select>
   <div id="cat-picker">
     <div class="cat-dot active" style="background:#5B8FE8" data-cat="二手" title="二手" onclick="selectCat(this)"></div>
     <div class="cat-dot" style="background:#4BC98A" data-cat="HAOCHI" title="HAOCHI" onclick="selectCat(this)"></div>
