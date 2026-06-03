@@ -267,12 +267,31 @@ class BoothSystem {
       if (item.label) {
         ctx.save();
         ctx.rotate(angle); // counter-rotate so text stays upright
-        const fontSize = Math.max(8, Math.min(sw * 0.3, sh * 0.35, 16));
-        ctx.font = `bold ${fontSize}px 'PingFang SC', sans-serif`;
-        ctx.fillStyle = isTable ? (hasOverlap ? '#CC0000' : col.stroke) : (isCanopy ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.85)');
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(item.label, 0, 0);
+
+        // Shrink font until label fits within booth width
+        const maxW = sw * 0.92;
+        const minSize = 6;
+        let fontSize = Math.max(minSize, Math.min(sw * 0.36, sh * 0.4, 16));
+        ctx.font = `bold ${fontSize}px 'PingFang SC', sans-serif`;
+        let tw = ctx.measureText(item.label).width;
+        while (tw > maxW && fontSize > minSize) {
+          fontSize -= 0.5;
+          ctx.font = `bold ${fontSize}px 'PingFang SC', sans-serif`;
+          tw = ctx.measureText(item.label).width;
+        }
+
+        {
+          const pad = Math.max(1, fontSize * 0.15);
+          const pillW = tw + pad * 2, pillH = fontSize + pad * 2;
+          ctx.fillStyle = 'rgba(255,255,255,0.82)';
+          ctx.beginPath();
+          ctx.roundRect(-pillW/2, -pillH/2, pillW, pillH, 2);
+          ctx.fill();
+          ctx.fillStyle = hasOverlap ? '#CC0000' : (isTable ? col.stroke : '#1a1a1a');
+          ctx.fillText(item.label, 0, 0);
+        }
         ctx.restore();
       }
 

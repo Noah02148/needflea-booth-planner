@@ -285,8 +285,9 @@ function _snapBooth(item) {
       // For side snaps, also align along the other axis
       let alignedY = snap.localY, alignedX = snap.localX;
       if (snap.side === 'right' || snap.side === 'left') {
+        // Reject snap if A's center is too far laterally from B's extent
+        if (Math.abs(ly) > bHH + aHH) continue;
         // Align Y: snap A's local Y edges to B's local Y edges
-        const edgeSnaps = [ly, bHH - aHH, -(bHH - aHH), bHH + aHH, -(bHH + aHH)]; // current, top-align, bottom-align
         let bestAlignY = ly, bestAlignDist = Infinity;
         for (const ey of [bHH - aHH, -(bHH - aHH), 0]) {
           const d = Math.abs(ly - ey);
@@ -294,6 +295,8 @@ function _snapBooth(item) {
         }
         alignedY = bestAlignY;
       } else {
+        // Reject snap if A's center is too far laterally from B's extent
+        if (Math.abs(lx) > bHW + aHW) continue;
         // Align X
         let bestAlignX = lx, bestAlignDist = Infinity;
         for (const ex of [bHW - aHW, -(bHW - aHW), 0]) {
@@ -517,11 +520,7 @@ function _drawExportLegend(ectx, lx, ly, w, stats, cats) {
   ectx.textBaseline = 'top';
   ectx.fillText('摊位图例', lx, ly);
 
-  ectx.font = '12px "PingFang SC", sans-serif';
-  ectx.fillStyle = subColor;
-  ectx.fillText(`共 ${stats.total} 个摊位`, lx, ly + 22);
-
-  let y = ly + 46;
+  let y = ly + 30;
   cats.forEach(([cat, count]) => {
     const col = booths.CAT_COLORS[cat];
     if (!col) return;
@@ -530,10 +529,6 @@ function _drawExportLegend(ectx, lx, ly, w, stats, cats) {
     ectx.font = '13px "PingFang SC", sans-serif';
     ectx.fillStyle = textColor;
     ectx.fillText(cat, lx + 22, y);
-    ectx.fillStyle = subColor;
-    ectx.textAlign = 'right';
-    ectx.fillText(String(count), lx + w, y);
-    ectx.textAlign = 'left';
     y += 26;
   });
 
@@ -541,20 +536,12 @@ function _drawExportLegend(ectx, lx, ly, w, stats, cats) {
     ectx.font = '13px "PingFang SC", sans-serif';
     ectx.fillStyle = textColor;
     ectx.fillText('安保点', lx, y);
-    ectx.fillStyle = subColor;
-    ectx.textAlign = 'right';
-    ectx.fillText(String(stats.guards), lx + w, y);
-    ectx.textAlign = 'left';
+    y += 26;
   }
   if (stats.fires > 0) {
-    y += 18;
     ectx.font = '13px "PingFang SC", sans-serif';
     ectx.fillStyle = textColor;
     ectx.fillText('灭火器', lx, y);
-    ectx.fillStyle = subColor;
-    ectx.textAlign = 'right';
-    ectx.fillText(String(stats.fires), lx + w, y);
-    ectx.textAlign = 'left';
   }
 }
 
@@ -1210,6 +1197,32 @@ function getFileExtension(name) {
   return (name || '').split('.').pop().toLowerCase();
 }
 
+function _setupDxfLayerState(dxfData) {
+  const dxfLayers = dxfData.layers || {};
+  _dwgLayerColors = {};
+  _dwgLayerVisibility = {};
+  _dwgEntitiesByLayer = {};
+  for (const [name, layer] of Object.entries(dxfLayers)) {
+    _dwgLayerColors[name] = Math.abs(layer.color || 7);
+    _dwgLayerVisibility[name] = layer.visible !== false;
+    _dwgEntitiesByLayer[name] = [];
+  }
+  if (dxfData.entities) {
+    for (const ent of dxfData.entities) {
+      const ln = ent.layer || '0';
+      if (!_dwgEntitiesByLayer[ln]) {
+        _dwgEntitiesByLayer[ln] = [];
+        _dwgLayerVisibility[ln] = true;
+        _dwgLayerColors[ln] = 7;
+      }
+      _dwgEntitiesByLayer[ln].push(ent);
+    }
+  }
+  _dwgRasterMode = false;
+  _dxfFullData = dxfData;
+  populateLayerPanel();
+}
+
 function onDXFParsed(dxfData) {
   if (!dxfData.entities || dxfData.entities.length === 0) {
     alert('文件解析完成，但未找到任何图形实体。\n请确认文件包含有效的 CAD 图形数据。');
@@ -1223,6 +1236,15 @@ function onDXFParsed(dxfData) {
   updateScaleInfo();
   setTool('select');
   render();
+}
+
+function _clearAnnotationsIfNeeded() {
+  if (booths.items.length > 0 || eraserMarks.length > 0) {
+    if (confirm(`检测到已有 ${booths.items.length} 个标注。\n加载新底图前是否清空全部标注？\n（点取消则保留现有标注）`)) {
+      booths.clearAll();
+      eraserMarks = [];
+    }
+  }
 }
 
 function onSvgLoaded() {
@@ -1281,31 +1303,8 @@ async function loadDWGFile(file) {
           const dxfData = parser.parse(dxfText);
           console.log('DXF parsed, entities:', dxfData.entities?.length);
 
-          // Populate layer panel from DXF data (layers stored in dxfData.layers)
-          const dxfLayers = dxfData.layers || {};
-          _dwgLayerColors = {};
-          _dwgLayerVisibility = {};
-          _dwgEntitiesByLayer = {};
-          for (const [name, layer] of Object.entries(dxfLayers)) {
-            _dwgLayerColors[name] = Math.abs(layer.color || 7);
-            _dwgLayerVisibility[name] = layer.visible !== false;
-            _dwgEntitiesByLayer[name] = [];
-          }
-          if (dxfData.entities) {
-            for (const ent of dxfData.entities) {
-              const ln = ent.layer || '0';
-              if (!_dwgEntitiesByLayer[ln]) {
-                _dwgEntitiesByLayer[ln] = [];
-                _dwgLayerVisibility[ln] = true;
-                _dwgLayerColors[ln] = 7;
-              }
-              _dwgEntitiesByLayer[ln].push(ent);
-            }
-          }
-          _dwgRasterMode = false;
-          _dxfFullData = dxfData; // store for layer toggling
-          populateLayerPanel();
-          console.log('Layer panel populated:', Object.keys(dxfLayers).length, 'layers');
+          _setupDxfLayerState(dxfData);
+          console.log('Layer panel populated:', Object.keys(dxfData.layers || {}).length, 'layers');
 
           onDXFParsed(dxfData);
 
@@ -1350,10 +1349,13 @@ function loadCADFile(input) {
 
   // Image files (scene photos)
   if (/^(jpg|jpeg|png|webp|bmp)$/.test(ext)) {
+    _clearAnnotationsIfNeeded();
     loadImageFile(file);
     input.value = '';
     return;
   }
+
+  _clearAnnotationsIfNeeded();
 
   if (ext === 'dwg') {
     loadDWGFile(file);
@@ -2364,7 +2366,15 @@ function clearAnnotations() {
     booths.clearAll();
     eraserMarks = [];
     hideProps();
+    localStorage.removeItem('needflea_autosave');
     render();
+  }
+}
+
+function clearAutoSave() {
+  if (confirm('清除浏览器中缓存的历史标注数据？\n（当前页面上的标注不受影响，下次刷新将不再自动恢复旧数据）')) {
+    localStorage.removeItem('needflea_autosave');
+    document.getElementById('tool-hint').textContent = '历史缓存已清除';
   }
 }
 
@@ -2453,6 +2463,7 @@ function loadProject(input) {
               const dxfText = await convertDWGtoDXF(ab, data.cadFile.name);
               const dxfData = parser.parse(dxfText);
               renderer.load(dxfData);
+              _setupDxfLayerState(dxfData);
               dwgLoaded = true;
             } catch (e2) {
               console.warn('Project DWG ODA failed:', e2);
@@ -2469,6 +2480,7 @@ function loadProject(input) {
           const content = new TextDecoder().decode(bytes);
           const dxfData = parser.parse(content);
           renderer.load(dxfData);
+          _setupDxfLayerState(dxfData);
           dxfLoaded = true;
           document.getElementById('welcome').classList.add('hidden');
           document.getElementById('btn-calib').disabled = false;
@@ -2507,6 +2519,7 @@ function loadProject(input) {
       }
       hideProps();
       render();
+      _autoSave();
       document.getElementById('tool-hint').textContent = `项目已载入：${booths.items.length} 个标注`;
     } catch (err) {
       alert('项目文件读取失败：' + err.message);
@@ -2661,13 +2674,13 @@ function renderLegend() {
   if (!container) return;
   let html = '';
   for (const [cat, col] of Object.entries(booths.CAT_COLORS)) {
-    html += `<div class="legend-item" style="cursor:pointer;" ondblclick="renameCategory('${cat.replace(/'/g, "\\'")}')">
-      <div class="legend-dot" style="background:${col.fill}"></div>
-      <span>${cat}</span>
+    const safeCat = cat.replace(/'/g, "\\'");
+    html += `<div class="legend-item" ondblclick="renameCategory('${safeCat}')">
+      <div class="legend-dot" style="background:${col.fill}" title="点击修改颜色" onclick="changeCategoryColor('${safeCat}')"></div>
+      <span style="cursor:pointer">${cat}</span>
     </div>\n`;
   }
   container.innerHTML = html;
-  // Also update toolbar cat picker
   _updateCatPicker();
 }
 
@@ -2714,8 +2727,29 @@ function renameCategory(oldName) {
   render();
 }
 
+function changeCategoryColor(cat) {
+  const col = booths.CAT_COLORS[cat];
+  if (!col) return;
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.value = col.fill;
+  input.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+  document.body.appendChild(input);
+  input.addEventListener('input', e => {
+    const hex = e.target.value;
+    const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+    const stroke = '#' + Math.round(r*0.7).toString(16).padStart(2,'0') + Math.round(g*0.7).toString(16).padStart(2,'0') + Math.round(b*0.7).toString(16).padStart(2,'0');
+    booths.CAT_COLORS[cat] = { fill: hex, stroke };
+    renderLegend();
+    render();
+  });
+  input.addEventListener('change', () => input.remove());
+  input.click();
+}
+
 window.addCategory = addCategory;
 window.renameCategory = renameCategory;
+window.changeCategoryColor = changeCategoryColor;
 
 // ── AUTO-SAVE (localStorage) ─────────────────────────────────────────────────
 function _autoSave() {
@@ -2810,5 +2844,5 @@ window.export3DPNG = function() {
 resize();
 setTool('select');
 renderLegend();
-_autoRestore();
+localStorage.removeItem('needflea_autosave');
 
