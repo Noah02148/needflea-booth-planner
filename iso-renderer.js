@@ -166,6 +166,8 @@ class IsoRenderer {
         this._drawTableBooth(ctx, item, boothSystem, isDark);
       } else if (item.style === 'canopy') {
         this._drawCanopy(ctx, item, boothSystem, isDark);
+      } else if (item.style === 'tent-yard' || item.style === 'canopy-yard') {
+        this._drawComposite(ctx, item, boothSystem, isDark);
       } else {
         this._drawTent(ctx, item, boothSystem, isDark);
       }
@@ -175,7 +177,7 @@ class IsoRenderer {
     items3d.forEach(item => {
       const col = this._getColor(item, boothSystem);
       const labelH = item.style === 'table' ? 0.5
-                   : item.style === 'canopy' ? (this.TENT_WALL_H + 0.35 + 0.3)
+                   : (item.style === 'canopy' || item.style === 'canopy-yard') ? (this.TENT_WALL_H + 0.35 + 0.3)
                    : (this.TENT_WALL_H + 0.4);
       this._drawBoothLabel(ctx, item, col, isDark, labelH);
     });
@@ -355,7 +357,7 @@ class IsoRenderer {
   // ── GROUND / BOOTHS ──────────────────────────────────────────
 
   _getColor(item, boothSystem) {
-    return boothSystem.CAT_COLORS[item.cat] || boothSystem.CAT_COLORS['其他'];
+    return boothSystem.catColor(item.cat);
   }
 
   _drawGround(ctx, items, isDark) {
@@ -372,6 +374,30 @@ class IsoRenderer {
       ctx.lineWidth = 0.5;
       ctx.stroke();
     });
+  }
+
+  // Composite: 空地 across the whole footprint + a fixed 2×2m booth
+  // (盘扣架 or 四角帐篷) pinned to one corner.
+  _drawComposite(ctx, item, boothSystem, isDark) {
+    // Ground/空地 covers the full footprint.
+    this._drawTableBooth(ctx, item, boothSystem, isDark);
+
+    // Booth portion: 2×2m expressed as a fraction of the footprint, so it
+    // stays correct whether or not the scene is calibrated to meters.
+    const [sizeW, sizeH] = (item.size || '2x2').split('x').map(Number);
+    const tmw = item.mw * Math.min(1, 2 / sizeW);
+    const tmh = item.mh * Math.min(1, 2 / sizeH);
+    // Pin to the corner given by tentCorner (booth-local, Y-up).
+    const tc = item.tentCorner || { sx: -1, sy: 1 };
+    const cx = tc.sx < 0 ? item.mx - item.mw / 2 + tmw / 2 : item.mx + item.mw / 2 - tmw / 2;
+    const cy = tc.sy > 0 ? item.my + item.mh / 2 - tmh / 2 : item.my - item.mh / 2 + tmh / 2;
+    const sub = { ...item, mx: cx, my: cy, mw: tmw, mh: tmh };
+
+    if (item.style === 'canopy-yard') {
+      this._drawCanopy(ctx, sub, boothSystem, isDark);
+    } else {
+      this._drawTent(ctx, sub, boothSystem, isDark);
+    }
   }
 
   _drawTent(ctx, item, boothSystem, isDark) {

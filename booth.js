@@ -22,6 +22,12 @@ class BoothSystem {
     };
   }
 
+  // Never-null color lookup — a booth's cat may not exist in CAT_COLORS
+  // (e.g. after loading a project with a different category set).
+  catColor(cat) {
+    return this.CAT_COLORS[cat] || this.CAT_COLORS['其他'] || { fill: '#9B7FD4', stroke: '#7055b0' };
+  }
+
   // ── CRUD ──────────────────────────────────────────────────
   addBooth(worldX, worldY, cat, size) {
     const [w, h] = this._sizeToWorld(size);
@@ -32,7 +38,8 @@ class BoothSystem {
       wy: worldY - h / 2,
       ww: w, wh: h,
       label: '', angle: 0,
-      boothStyle: 'tent'   // 'tent' = 帐篷, 'table' = 空地+桌椅
+      boothStyle: 'tent',  // 'tent' = 帐篷, 'table' = 空地+桌椅
+      sizeClass: 'standard' // 迷你/标准/特大 — semantic label only, no effect on dimensions
     };
     this.items.push(item);
     return item;
@@ -123,8 +130,9 @@ class BoothSystem {
   updateItem(id, props) {
     const item = this.items.find(i => i.id === id);
     if (!item) return;
-    // Recalc size if changed
-    if (props.size && props.size !== item.size) {
+    // Recalc size if changed — but honor explicit ww/wh from caller
+    // (app.js converts meters→DXF units, which _sizeToWorld can't do)
+    if (props.size && props.size !== item.size && props.ww == null && props.wh == null) {
       const [w, h] = this._sizeToWorld(props.size);
       props.ww = w; props.wh = h;
     }
@@ -194,6 +202,149 @@ class BoothSystem {
     this.items.forEach(item => this._drawItem(ctx, renderer, item));
   }
 
+  // ── ZONE PLAN (区域规划图) ─────────────────────────────────
+  // Merge each category's booths into one contiguous region so the exact
+  // booth count is obscured, while real size/orientation/angle are preserved.
+  // Non-booth annotations (guards/arrows/text/lines/dims) draw normally on top.
+  drawZonePlan(ctx, R) {
+    this._drawZoneRegions(ctx, R);
+    this.items.forEach(item => {
+      if (item.type !== 'booth') this._drawItem(ctx, R, item);
+    });
+  }
+
+  _drawZoneRegions(ctx, R) {
+    const W = ctx.canvas.width, H = ctx.canvas.height;
+    const byCat = {};
+    this.items.forEach(b => {
+      if (b.type === 'booth') (byCat[b.cat] = byCat[b.cat] || []).push(b);
+    });
+    // Merge ALONG WIDTH ONLY, and only toward an actual same-category neighbour
+    // in the same row. A width-end with no neighbour (row end) isn't expanded,
+    // and the depth axis is never grown — so the region stays at the true
+    // footprint toward the aisle and the rear split between two rows shows.
+    const borderPx = 1.5; // hairline outline
+
+    for (const cat in byCat) {
+      const items = byCat[cat];
+      const col = this.catColor(cat);
+      const exp = this._computeWidthExpansions(items); // Map<item, {l,r}> in world units
+      const maskFill = this._zoneMask(R, items, exp, 0, W, H);
+      const fillC = this._recolorMask(maskFill, col.fill, W, H);
+      // Thin outer ring = (region + borderPx) minus the region
+      const ringC = this._recolorMask(this._zoneMask(R, items, exp, borderPx, W, H), col.stroke, W, H);
+      const rc = ringC.getContext('2d');
+      rc.globalCompositeOperation = 'destination-out';
+      rc.drawImage(maskFill, 0, 0);
+
+      ctx.save();
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(fillC, 0, 0);
+      ctx.globalAlpha = 0.9;
+      ctx.drawImage(ringC, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  // For each booth, how far to stretch each end of its WIDTH axis so it just
+  // reaches a same-row same-category neighbour (0 = no neighbour on that side).
+  _computeWidthExpansions(items) {
+    const mppu = (typeof metersPerUnit !== 'undefined' && metersPerUnit) ? metersPerUnit : null;
+    const m2w = m => mppu ? m / mppu : m * 10;
+    const maxBridge = m2w(1.2); // only bridge gaps up to ~1.2m
+    const overlap = m2w(0.15);  // small overlap so neighbours fuse seamlessly
+    const maxExpand = m2w(0.8);
+    const rowPerpFrac = 0.5;    // neighbour must sit within ~half a depth (same row)
+
+    const g = items.map(b => {
+      const a = (b.angle || 0) * Math.PI / 180;
+      return {
+        b,
+        cx: b.wx + b.ww / 2, cy: b.wy + b.wh / 2,
+        ux: Math.cos(a), uy: Math.sin(a),  // width axis (world)
+        vx: -Math.sin(a), vy: Math.cos(a), // depth axis (world)
+        hw: b.ww / 2, hh: b.wh / 2
+      };
+    });
+
+    const result = new Map();
+    for (let i = 0; i < g.length; i++) {
+      const bi = g[i];
+      let bestL = null, bestR = null; // nearest edge gap on each width end
+      for (let j = 0; j < g.length; j++) {
+        if (i === j) continue;
+        const bj = g[j];
+        const dx = bj.cx - bi.cx, dy = bj.cy - bi.cy;
+        const along = dx * bi.ux + dy * bi.uy;
+        const perp = dx * bi.vx + dy * bi.vy;
+        // j's footprint projected onto i's axes
+        const jAlong = Math.abs(bj.hw * (bj.ux * bi.ux + bj.uy * bi.uy)) + Math.abs(bj.hh * (bj.vx * bi.ux + bj.vy * bi.uy));
+        const jPerp = Math.abs(bj.hw * (bj.ux * bi.vx + bj.uy * bi.vy)) + Math.abs(bj.hh * (bj.vx * bi.vx + bj.vy * bi.vy));
+        // must be in the same row (depth-aligned), not the row in front/behind
+        if (Math.abs(perp) > (bi.hh + jPerp) * rowPerpFrac) continue;
+        const gap = Math.abs(along) - bi.hw - jAlong;
+        if (gap > maxBridge) continue;
+        if (along >= 0) { if (bestR === null || gap < bestR) bestR = gap; }
+        else { if (bestL === null || gap < bestL) bestL = gap; }
+      }
+      const amt = s => s === null ? 0 : (s <= 0 ? overlap : Math.min(maxExpand, s / 2 + overlap));
+      result.set(bi.b, { l: amt(bestL), r: amt(bestR) });
+    }
+    return result;
+  }
+
+  // Black silhouette of a category's booths, each stretched along its width per
+  // `exp` (Map<item,{l,r}> in world units). `fattenPx` (border only) grows the
+  // edge uniformly by that small amount.
+  _zoneMask(R, items, exp, fattenPx, W, H) {
+    const off = document.createElement('canvas');
+    off.width = W; off.height = H;
+    const o = off.getContext('2d');
+    o.fillStyle = '#000'; o.strokeStyle = '#000';
+    o.lineJoin = 'miter';
+    // One combined path filled once → no per-rectangle anti-alias seams,
+    // so width-overlapping booths in a row merge into a single clean strip.
+    o.beginPath();
+    items.forEach(b => this._addBoothSubpath(o, R, b, exp.get(b)));
+    o.fill();
+    if (fattenPx > 0) {
+      o.lineWidth = fattenPx * 2;
+      o.beginPath();
+      items.forEach(b => this._addBoothSubpath(o, R, b, exp.get(b)));
+      o.stroke();
+    }
+    return off;
+  }
+
+  _recolorMask(mask, color, W, H) {
+    const off = document.createElement('canvas');
+    off.width = W; off.height = H;
+    const o = off.getContext('2d');
+    o.drawImage(mask, 0, 0);
+    o.globalCompositeOperation = 'source-in';
+    o.fillStyle = color;
+    o.fillRect(0, 0, W, H);
+    return off;
+  }
+
+  // Add a booth's rotated rectangle as a subpath of the current path (no
+  // beginPath) so a whole category fills in one pass. The rect is stretched
+  // along its local WIDTH (ww) axis by `exp.l`/`exp.r` (world units) toward
+  // each neighbour; the DEPTH (wh) axis is left exact so the region never grows
+  // toward the aisle.
+  _addBoothSubpath(o, R, item, exp) {
+    const lPx = (exp ? exp.l : 0) * R.scale;
+    const rPx = (exp ? exp.r : 0) * R.scale;
+    const cx = R.wx(item.wx + item.ww / 2), cy = R.wy(item.wy + item.wh / 2);
+    const sw = item.ww * R.scale, sh = item.wh * R.scale;
+    const a = (item.angle || 0) * Math.PI / 180;
+    o.save();
+    o.translate(cx, cy);
+    o.rotate(-a); // screen Y is flipped
+    o.rect(-sw / 2 - lPx, -sh / 2, sw + lPx + rPx, sh);
+    o.restore();
+  }
+
   _drawItem(ctx, R, item) {
     const sel = item.id === this.selectedId || this.selectedIds.has(item.id);
 
@@ -201,7 +352,7 @@ class BoothSystem {
       const cx = R.wx(item.wx + item.ww / 2);
       const cy = R.wy(item.wy + item.wh / 2);
       const sw = item.ww * R.scale, sh = item.wh * R.scale;
-      const col = this.CAT_COLORS[item.cat] || this.CAT_COLORS['其他'];
+      const col = this.catColor(item.cat);
       const angle = (item.angle || 0) * Math.PI / 180;
       const hasOverlap = this.checkOverlap(item);
 
@@ -210,56 +361,75 @@ class BoothSystem {
       ctx.rotate(-angle); // screen Y is flipped
 
       const bStyle = item.boothStyle || 'tent';
+      const isComposite = bStyle === 'tent-yard' || bStyle === 'canopy-yard';
       const isTable = bStyle === 'table';
-      const isCanopy = bStyle === 'canopy';
 
       if (sel) { ctx.shadowColor = col.fill + '99'; ctx.shadowBlur = 10; }
 
-      if (isTable) {
-        // 空地: light fill + dashed border + diagonal hatching
-        ctx.fillStyle = hasOverlap ? '#FF444430' : col.fill + '30';
-        ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
-        ctx.lineWidth = sel ? 2.5 : 1.2;
-        ctx.setLineDash([6, 4]);
-        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
-        ctx.fill(); ctx.stroke();
-        ctx.setLineDash([]);
-        // Diagonal lines
-        ctx.save();
-        ctx.beginPath();
-        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
-        ctx.clip();
-        ctx.strokeStyle = hasOverlap ? '#CC000040' : col.fill + '50';
-        ctx.lineWidth = 1;
-        const step = Math.max(6, Math.min(12, sw * 0.12));
-        for (let d = -sw - sh; d < sw + sh; d += step) {
+      // Draw one base style (tent/canopy/table) into a local-space rect.
+      const drawShape = (baseStyle, x, y, w, h) => {
+        if (baseStyle === 'table') {
+          // 空地: light fill + dashed border + diagonal hatching
+          ctx.fillStyle = hasOverlap ? '#FF444430' : col.fill + '30';
+          ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
+          ctx.lineWidth = sel ? 2.5 : 1.2;
+          ctx.setLineDash([6, 4]);
+          this._roundRect(ctx, x, y, w, h, 3);
+          ctx.fill(); ctx.stroke();
+          ctx.setLineDash([]);
+          // Diagonal lines
+          ctx.save();
           ctx.beginPath();
-          ctx.moveTo(-sw/2 + d, -sh/2);
-          ctx.lineTo(-sw/2 + d + sh, sh/2);
+          this._roundRect(ctx, x, y, w, h, 3);
+          ctx.clip();
+          ctx.strokeStyle = hasOverlap ? '#CC000040' : col.fill + '50';
+          ctx.lineWidth = 1;
+          const step = Math.max(6, Math.min(12, w * 0.12));
+          for (let d = -w - h; d < w + h; d += step) {
+            ctx.beginPath();
+            ctx.moveTo(x + d, y);
+            ctx.lineTo(x + d + h, y + h);
+            ctx.stroke();
+          }
+          ctx.restore();
+        } else if (baseStyle === 'canopy') {
+          // 四角帐篷: lighter fill with X cross lines
+          ctx.fillStyle = hasOverlap ? '#FF444480' : col.fill + '70';
+          ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
+          ctx.lineWidth = sel ? 2.5 : 1.2;
+          this._roundRect(ctx, x, y, w, h, 3);
+          ctx.fill(); ctx.stroke();
+          // X cross to indicate canopy
+          ctx.strokeStyle = hasOverlap ? '#CC000060' : 'rgba(255,255,255,0.35)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x, y); ctx.lineTo(x + w, y + h);
+          ctx.moveTo(x + w, y); ctx.lineTo(x, y + h);
           ctx.stroke();
+        } else {
+          // 盘扣架帐篷: solid fill
+          ctx.fillStyle = hasOverlap ? '#FF4444' : col.fill;
+          ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
+          ctx.lineWidth = sel ? 2.5 : 1.2;
+          this._roundRect(ctx, x, y, w, h, 3);
+          ctx.fill(); ctx.stroke();
         }
-        ctx.restore();
-      } else if (isCanopy) {
-        // 四角帐篷: lighter fill with X cross lines
-        ctx.fillStyle = hasOverlap ? '#FF444480' : col.fill + '70';
-        ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
-        ctx.lineWidth = sel ? 2.5 : 1.2;
-        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
-        ctx.fill(); ctx.stroke();
-        // X cross to indicate canopy
-        ctx.strokeStyle = hasOverlap ? '#CC000060' : 'rgba(255,255,255,0.35)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(-sw/2, -sh/2); ctx.lineTo(sw/2, sh/2);
-        ctx.moveTo(sw/2, -sh/2); ctx.lineTo(-sw/2, sh/2);
-        ctx.stroke();
+      };
+
+      if (isComposite) {
+        // Whole footprint = 空地, with a 2×2m booth pinned to one corner.
+        // tentCorner is stored in booth-local, Y-up (DXF) coords; screen Y is
+        // flipped, so sy>0 (up) draws at the top (-sh/2).
+        const [mw, mh] = (item.size || '2x2').split('x').map(Number);
+        const tw = Math.min(sw, sw * (2 / mw));
+        const th = Math.min(sh, sh * (2 / mh));
+        const tc = item.tentCorner || { sx: -1, sy: 1 };
+        const tx = tc.sx < 0 ? -sw/2 : sw/2 - tw;
+        const ty = tc.sy > 0 ? -sh/2 : sh/2 - th;
+        drawShape('table', -sw/2, -sh/2, sw, sh);
+        drawShape(bStyle === 'canopy-yard' ? 'canopy' : 'tent', tx, ty, tw, th);
       } else {
-        // 盘扣架帐篷: solid fill
-        ctx.fillStyle = hasOverlap ? '#FF4444' : col.fill;
-        ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
-        ctx.lineWidth = sel ? 2.5 : 1.2;
-        this._roundRect(ctx, -sw/2, -sh/2, sw, sh, 3);
-        ctx.fill(); ctx.stroke();
+        drawShape(bStyle, -sw/2, -sh/2, sw, sh);
       }
       ctx.shadowBlur = 0;
 

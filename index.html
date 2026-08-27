@@ -213,6 +213,8 @@
     <option value="tent">⬜ 盘扣架帐篷</option>
     <option value="canopy">⛺ 四角帐篷</option>
     <option value="table">▦ 空地</option>
+    <option value="tent-yard">⬜＋▦ 盘扣架＋空地</option>
+    <option value="canopy-yard">⛺＋▦ 四角帐篷＋空地</option>
   </select>
   <div id="cat-picker">
     <div class="cat-dot active" style="background:#5B8FE8" data-cat="二手" title="二手" onclick="selectCat(this)"></div>
@@ -222,13 +224,20 @@
     <div class="cat-dot" style="background:#F5C842" data-cat="WORKSHOP" title="WORKSHOP" onclick="selectCat(this)"></div>
     <div class="cat-dot" style="background:#9B7FD4" data-cat="其他" title="其他" onclick="selectCat(this)"></div>
   </div>
-  <select id="size-select" title="帐篷尺寸">
+  <select id="size-select" title="帐篷尺寸" onchange="toggleCustomSize()">
     <option value="2x2">2×2m</option>
     <option value="2x1">2×1m</option>
     <option value="2x4">2×4m</option>
     <option value="3x3">3×3m</option>
     <option value="1x1">1×1m</option>
+    <option value="custom">自定义…</option>
   </select>
+  <span id="custom-size-fields" style="display:none;align-items:center;gap:3px">
+    <input type="number" id="custom-w" value="3" min="0.5" max="50" step="0.5" style="width:46px" title="宽(米)">
+    <span style="color:var(--text3)">×</span>
+    <input type="number" id="custom-h" value="3" min="0.5" max="50" step="0.5" style="width:46px" title="长(米)">
+    <span style="color:var(--text3);font-size:12px">m</span>
+  </span>
   <div class="tb-sep"></div>
   <button class="tb-btn" id="btn-guard" onclick="setTool('guard')">👮 安保</button>
   <button class="tb-btn" id="btn-fire" onclick="setTool('fire')">🧯 灭火器</button>
@@ -253,8 +262,16 @@
   <input type="file" id="load-input" accept=".json" onchange="loadProject(this)" style="display:none">
   <div class="tb-sep"></div>
   <button class="tb-btn" id="btn-theme" onclick="toggleTheme()">☀ 白底</button>
-  <button class="tb-btn" onclick="exportPNG()">💾 全图</button>
-  <button class="tb-btn" onclick="setTool('crop')">✂ 截取</button>
+  <select class="tb-btn" id="btn-export-plan" onchange="exportPlanMenu(this)" title="摊位图导出">
+    <option value="" selected disabled hidden>🖼 摊位图</option>
+    <option value="full">💾 全图</option>
+    <option value="crop">✂ 截取</option>
+  </select>
+  <select class="tb-btn" id="btn-export-zone" onchange="exportZoneMenu(this)" title="区域示意图导出，模糊摊位数量">
+    <option value="" selected disabled hidden>🗺 区域图</option>
+    <option value="full">💾 全图</option>
+    <option value="crop">✂ 截取</option>
+  </select>
   <button class="tb-btn" onclick="exportDXF()">📤 DXF</button>
   <button class="tb-btn" id="btn-3d" onclick="toggle3DView()">🧊 3D</button>
   <button class="tb-btn" onclick="downloadConvertedDXF()">💾 底图DXF</button>

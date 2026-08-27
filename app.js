@@ -83,6 +83,7 @@ let lineState = null; // null | { pts: [{wx,wy}] }
 
 // Crop export state — polygon-based
 let cropState = null; // null | { pts: [{wx,wy}], closed: bool }
+let cropMode = 'plan'; // 'plan' = 摊位图 (with counts) | 'zone' = 区域图 (merged, no counts)
 
 // Clipboard
 let _clipboard = null; // [{ ...item }] deep copied items
@@ -121,20 +122,13 @@ function render() {
     return;
   }
   renderer.render();
-  booths.draw(ctx, renderer);
-  // Draw eraser marks (cover with background color)
-  if (eraserMarks.length > 0) {
-    ctx.save();
-    ctx.fillStyle = darkMode ? '#1e1e1e' : '#ffffff';
-    eraserMarks.forEach(m => {
-      const sx = renderer.wx(m.wx), sy = renderer.wy(m.wy);
-      const sr = m.wr * renderer.scale;
-      ctx.beginPath();
-      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.restore();
-  }
+  // Draw eraser marks (cover CAD base layer) — before annotations so booths/
+  // arrows/text added afterwards display on top of erased areas
+  _drawEraserMarks();
+  // While cropping the 区域图, preview the merged zone regions so the user
+  // selects over exactly what will be exported.
+  if (tool === 'crop' && cropMode === 'zone') booths.drawZonePlan(ctx, renderer);
+  else booths.draw(ctx, renderer);
   // Draw completed measurement
   if (measureState && measureState.p1 && measureState.p2) {
     _drawMeasureLine(measureState.p1, measureState.p2);
@@ -145,6 +139,20 @@ function render() {
   }
   updateStatusBar();
   updateStats();
+}
+
+function _drawEraserMarks() {
+  if (eraserMarks.length === 0) return;
+  ctx.save();
+  ctx.fillStyle = darkMode ? '#1e1e1e' : '#ffffff';
+  eraserMarks.forEach(m => {
+    const sx = renderer.wx(m.wx), sy = renderer.wy(m.wy);
+    const sr = m.wr * renderer.scale;
+    ctx.beginPath();
+    ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.restore();
 }
 
 function _drawMeasureLine(p1, p2) {
@@ -318,6 +326,7 @@ function _snapBooth(item) {
         bestSnap = {
           wx: newCx - aHW, wy: newCy - aHH,
           angle: (other.angle || 0),
+          side: snap.side,
           bCx, bCy, bAngle
         };
       }
@@ -329,6 +338,19 @@ function _snapBooth(item) {
     item.wy = bestSnap.wy;
     item.angle = bestSnap.angle;
     item._snapGuides = [{ snapped: true }];
+
+    // Composite booths (盘扣架/四角帐篷 ＋ 空地): push the frame to the corner
+    // AWAY from the neighbour it snapped to, so the 空地 (yard) is what meets
+    // the neighbour — 就近原则. Only the axis facing the neighbour is set; the
+    // perpendicular axis keeps its current value.
+    if (item.boothStyle === 'tent-yard' || item.boothStyle === 'canopy-yard') {
+      const tc = { ...(item.tentCorner || { sx: -1, sy: 1 }) };
+      if (bestSnap.side === 'top') tc.sy = 1;        // item above neighbour → frame up
+      else if (bestSnap.side === 'bottom') tc.sy = -1;
+      else if (bestSnap.side === 'right') tc.sx = 1; // item right of neighbour → frame right
+      else if (bestSnap.side === 'left') tc.sx = -1;
+      item.tentCorner = tc;
+    }
   }
 }
 
@@ -491,14 +513,15 @@ function _closeCropAndExport() {
     ectx.drawImage(canvas, bx, by, bw, bh, 0, 0, bw, bh);
     ectx.restore();
 
-    // Draw legend
+    // Draw legend (区域图 hides counts)
     if (cats.length > 0) {
-      _drawExportLegend(ectx, bw + 20, 16, legendW - 40, stats, cats);
+      _drawExportLegend(ectx, bw + 20, 16, legendW - 40, stats, cats, cropMode !== 'zone');
     }
 
     // Download
     const link = document.createElement('a');
-    link.download = `NEEDFLEA_crop_${new Date().toISOString().slice(0,10)}.png`;
+    const tag = cropMode === 'zone' ? 'zone_crop' : 'crop';
+    link.download = `NEEDFLEA_${tag}_${new Date().toISOString().slice(0,10)}.png`;
     link.href = exportCanvas.toDataURL('image/png');
     link.click();
 
@@ -509,40 +532,55 @@ function _closeCropAndExport() {
   }, 100);
 }
 
-function _drawExportLegend(ectx, lx, ly, w, stats, cats) {
+function _drawExportLegend(ectx, lx, ly, w, stats, cats, showCounts = true) {
   const isDark = darkMode;
   const textColor = isDark ? '#ffffff' : '#1a1a18';
   const subColor = isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.45)';
+
+  const rx = lx + w; // right edge for count alignment
 
   ectx.font = 'bold 16px "PingFang SC", sans-serif';
   ectx.fillStyle = textColor;
   ectx.textAlign = 'left';
   ectx.textBaseline = 'top';
-  ectx.fillText('摊位图例', lx, ly);
+  ectx.fillText(showCounts ? '摊位图例' : '区域图例', lx, ly);
+  // Total booths, right-aligned next to title (omitted in count-free zone plan)
+  if (showCounts) {
+    ectx.textAlign = 'right';
+    ectx.fillStyle = subColor;
+    ectx.font = '13px "PingFang SC", sans-serif';
+    ectx.fillText(`共 ${stats.total} 个`, rx, ly + 2);
+  }
+
+  // Helper: one legend row, with optional right-aligned count
+  const row = (name, count, y, swatch) => {
+    if (swatch) {
+      ectx.fillStyle = swatch;
+      ectx.fillRect(lx, y + 1, 14, 14);
+    }
+    ectx.font = '13px "PingFang SC", sans-serif';
+    ectx.textAlign = 'left';
+    ectx.fillStyle = textColor;
+    ectx.fillText(name, lx + (swatch ? 22 : 0), y);
+    if (showCounts && count != null) {
+      ectx.textAlign = 'right';
+      ectx.fillStyle = subColor;
+      ectx.fillText(`× ${count}`, rx, y);
+    }
+  };
 
   let y = ly + 30;
   cats.forEach(([cat, count]) => {
     const col = booths.CAT_COLORS[cat];
     if (!col) return;
-    ectx.fillStyle = col.fill;
-    ectx.fillRect(lx, y + 1, 14, 14);
-    ectx.font = '13px "PingFang SC", sans-serif';
-    ectx.fillStyle = textColor;
-    ectx.fillText(cat, lx + 22, y);
+    row(cat, count, y, col.fill);
     y += 26;
   });
 
-  if (stats.guards > 0) {
-    ectx.font = '13px "PingFang SC", sans-serif';
-    ectx.fillStyle = textColor;
-    ectx.fillText('安保点', lx, y);
-    y += 26;
-  }
-  if (stats.fires > 0) {
-    ectx.font = '13px "PingFang SC", sans-serif';
-    ectx.fillStyle = textColor;
-    ectx.fillText('灭火器', lx, y);
-  }
+  if (stats.guards > 0) { row('安保点', showCounts ? stats.guards : null, y); y += 26; }
+  if (stats.fires > 0) { row('灭火器', showCounts ? stats.fires : null, y); y += 26; }
+
+  ectx.textAlign = 'left';
 }
 
 function toggleTheme() {
@@ -1508,8 +1546,21 @@ function setTool(t) {
 }
 
 function setBoothStyle(style) {
+  const prev = activeBoothStyle;
   activeBoothStyle = style;
   setTool('booth');
+  // Composite styles (盘扣架/四角帐篷 ＋ 空地) default to 4×2m
+  // = a fixed 2×2 booth in one corner + 2×2 空地.
+  const isComposite = style === 'tent-yard' || style === 'canopy-yard';
+  if (isComposite && prev !== style) {
+    const sizeSel = document.getElementById('size-select');
+    if (sizeSel) {
+      sizeSel.value = 'custom';
+      document.getElementById('custom-w').value = 4;
+      document.getElementById('custom-h').value = 2;
+      toggleCustomSize();
+    }
+  }
 }
 
 function selectCat(el) {
@@ -1638,8 +1689,8 @@ canvas.addEventListener('mousedown', e => {
   }
 
   if (tool === 'booth') {
-    const size = document.getElementById('size-select').value;
-    const [mw, mh] = size === 'custom' ? [3, 3] : size.split('x').map(Number);
+    const size = currentBoothSize();
+    const [mw, mh] = size.split('x').map(Number);
     const ww = metersToDXF(mw), wh = metersToDXF(mh);
     const item = booths.addBooth(wx, wy, activeCat, size);
     item.boothStyle = activeBoothStyle;
@@ -2161,16 +2212,20 @@ function showProps(item) {
   const selBooths = [...booths.selectedIds].map(id => booths.getItem(id)).filter(i => i && i.type === 'booth');
   if (selBooths.length > 1) {
     const CAT_OPTS_B = Object.keys(booths.CAT_COLORS).map(c => `<option value="${c}">${c}</option>`).join('');
-    const styleOptsB = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    const styleOptsB = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地'],['tent-yard','盘扣架＋空地'],['canopy-yard','四角帐篷＋空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    const sizeClassOptsB = [['mini','迷你摊位'],['standard','标准摊位'],['xl','特大摊位']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
     const sizes = ['2x2','2x4','3x3','1x1'];
     const sizeOptsB = sizes.map(s => `<option value="${s}">${s}m</option>`).join('');
     content.innerHTML = `
       <div style="font-size:12px;color:var(--text2);margin-bottom:8px">已选 ${selBooths.length} 个摊位</div>
-      <div class="prop-row"><label>批量类型</label>
+      <div class="prop-row"><label>批量区域</label>
         <select onchange="batchUpdateBooths('cat',this.value)"><option value="">—</option>${CAT_OPTS_B}</select>
       </div>
       <div class="prop-row"><label>批量搭建</label>
         <select onchange="batchUpdateBooths('boothStyle',this.value)"><option value="">—</option>${styleOptsB}</select>
+      </div>
+      <div class="prop-row"><label>批量大小</label>
+        <select onchange="batchUpdateBooths('sizeClass',this.value)"><option value="">—</option>${sizeClassOptsB}</select>
       </div>
       <div class="prop-row"><label>批量尺寸</label>
         <select onchange="batchResizeBooths(this.value)"><option value="">—</option>${sizeOptsB}</select>
@@ -2184,18 +2239,42 @@ function showProps(item) {
 
   if (item.type === 'booth') {
     const sizes = ['2x2','2x4','3x3','1x1'];
-    const sizeOpts = sizes.map(s => `<option value="${s}" ${s === item.size ? 'selected' : ''}>${s}m</option>`).join('');
+    const isCustomSize = !sizes.includes(item.size);
+    const [cw, ch] = (item.size || '3x3').split('x').map(Number);
+    const sizeOpts = sizes.map(s => `<option value="${s}" ${s === item.size ? 'selected' : ''}>${s}m</option>`).join('')
+      + `<option value="custom" ${isCustomSize ? 'selected' : ''}>自定义…</option>`;
     const bStyle = item.boothStyle || 'tent';
-    const styleOpts = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
+    const styleOpts = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地'],['tent-yard','盘扣架＋空地'],['canopy-yard','四角帐篷＋空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
+    const isCompositeStyle = bStyle === 'tent-yard' || bStyle === 'canopy-yard';
+    const tc = item.tentCorner || { sx: -1, sy: 1 };
+    const curCorner = `${tc.sx},${tc.sy}`;
+    const frameLabel = bStyle === 'canopy-yard' ? '帐篷位置' : '盘扣架位置';
+    const cornerOpts = [['-1,1','左上'],['1,1','右上'],['-1,-1','左下'],['1,-1','右下']]
+      .map(([v,l]) => `<option value="${v}" ${v === curCorner ? 'selected' : ''}>${l}</option>`).join('');
+    const sizeClass = item.sizeClass || 'standard';
+    const sizeClassOpts = [['mini','迷你摊位'],['standard','标准摊位'],['xl','特大摊位']].map(([v,l]) => `<option value="${v}" ${v === sizeClass ? 'selected' : ''}>${l}</option>`).join('');
     content.innerHTML = `
-      <div class="prop-row"><label>摊位类型</label>
+      <div class="prop-row"><label>摊位区域</label>
         <select onchange="updateItem(${item.id},'cat',this.value)">${CAT_OPTS}</select>
       </div>
       <div class="prop-row"><label>搭建方式</label>
         <select onchange="updateItem(${item.id},'boothStyle',this.value)">${styleOpts}</select>
       </div>
+      <div class="prop-row" id="tent-corner-row-${item.id}" style="display:${isCompositeStyle ? 'flex' : 'none'}"><label>${frameLabel}</label>
+        <select onchange="setTentCorner(${item.id},this.value)">${cornerOpts}</select>
+      </div>
+      <div class="prop-row"><label>摊位大小</label>
+        <select onchange="updateItem(${item.id},'sizeClass',this.value)">${sizeClassOpts}</select>
+      </div>
       <div class="prop-row"><label>帐篷尺寸</label>
-        <select onchange="resizeBooth(${item.id},this.value)">${sizeOpts}</select>
+        <select onchange="onBoothSizeSelect(${item.id},this.value)">${sizeOpts}</select>
+      </div>
+      <div class="prop-row" id="custom-size-row-${item.id}" style="display:${isCustomSize ? 'flex' : 'none'}"><label>自定义(m)</label>
+        <div style="display:flex;align-items:center;gap:4px">
+          <input type="number" id="csz-w-${item.id}" value="${isCustomSize ? cw : 3}" min="0.5" max="50" step="0.5" style="width:56px" onchange="resizeBoothCustom(${item.id})">
+          <span style="color:var(--text3)">×</span>
+          <input type="number" id="csz-h-${item.id}" value="${isCustomSize ? ch : 3}" min="0.5" max="50" step="0.5" style="width:56px" onchange="resizeBoothCustom(${item.id})">
+        </div>
       </div>
       <div class="prop-row"><label>旋转角度</label>
         <div style="display:flex;align-items:center;gap:6px">
@@ -2243,6 +2322,14 @@ window.updateItem = function(id, key, val) {
   render();
 };
 
+// Manually pin the frame (盘扣架/四角帐篷) of a composite booth to a corner.
+// Value is "sx,sy" in booth-local Y-up coords (sy>0 = top on screen).
+window.setTentCorner = function(id, val) {
+  const [sx, sy] = val.split(',').map(Number);
+  booths.updateItem(id, { tentCorner: { sx, sy } });
+  render();
+};
+
 window.batchUpdateBooths = function(key, val) {
   if (!val) return;
   for (const id of booths.selectedIds) {
@@ -2251,6 +2338,22 @@ window.batchUpdateBooths = function(key, val) {
   }
   render();
 };
+
+// Toolbar custom-size helpers
+window.toggleCustomSize = function() {
+  const isCustom = document.getElementById('size-select').value === 'custom';
+  document.getElementById('custom-size-fields').style.display = isCustom ? 'inline-flex' : 'none';
+};
+
+// Resolve the size string ("WxH" in meters) for newly placed booths
+function currentBoothSize() {
+  const sel = document.getElementById('size-select').value;
+  if (sel !== 'custom') return sel;
+  const clamp = v => Math.min(50, Math.max(0.5, parseFloat(v) || 3));
+  const w = clamp(document.getElementById('custom-w').value);
+  const h = clamp(document.getElementById('custom-h').value);
+  return `${w}x${h}`;
+}
 
 window.batchResizeBooths = function(size) {
   if (!size) return;
@@ -2263,6 +2366,24 @@ window.batchResizeBooths = function(size) {
     booths.updateItem(id, { size, ww, wh, wx: cx - ww / 2, wy: cy - wh / 2 });
   }
   render();
+};
+
+// Booth size dropdown in props panel: preset → resize, "custom" → reveal inputs
+window.onBoothSizeSelect = function(id, val) {
+  if (val === 'custom') {
+    const row = document.getElementById('custom-size-row-' + id);
+    if (row) row.style.display = 'flex';
+    resizeBoothCustom(id);
+    return;
+  }
+  resizeBooth(id, val);
+};
+
+window.resizeBoothCustom = function(id) {
+  const clamp = v => Math.min(50, Math.max(0.5, parseFloat(v) || 3));
+  const w = clamp(document.getElementById('csz-w-' + id).value);
+  const h = clamp(document.getElementById('csz-h-' + id).value);
+  resizeBooth(id, `${w}x${h}`);
 };
 
 window.resizeBooth = function(id, size) {
@@ -2351,6 +2472,74 @@ function exportPNG() {
   render();
 }
 
+// Export a zone/area schematic: booths of each category fused into a single
+// region (count obscured) while size/orientation/angle stay accurate; the
+// right-side legend lists types only, with no counts.
+function exportZonePlan() {
+  if (booths.items.filter(i => i.type === 'booth').length === 0) {
+    alert('暂无摊位，无法生成区域规划图。');
+    return;
+  }
+  const prevSel = booths.selectedId;
+  const prevSelIds = new Set(booths.selectedIds);
+  booths.selectedId = null;
+  booths.selectedIds.clear();
+
+  // Custom render: CAD base + eraser, then merged zone regions (no per-booth cells)
+  if (_3dMode) toggle3DView(); // ensure 2D canvas is active
+  renderer.render();
+  _drawEraserMarks();
+  booths.drawZonePlan(ctx, renderer);
+
+  // Legend without counts
+  const stats = booths.getStats();
+  const cats = Object.entries(stats.counts);
+  const legendW = cats.length > 0 ? 280 : 0;
+  const srcW = canvas.width, srcH = canvas.height;
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = srcW + legendW;
+  exportCanvas.height = srcH;
+  const ectx = exportCanvas.getContext('2d');
+  ectx.fillStyle = darkMode ? '#1e1e1e' : '#ffffff';
+  ectx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+  ectx.drawImage(canvas, 0, 0);
+  if (cats.length > 0) {
+    _drawExportLegend(ectx, srcW + 20, 16, legendW - 40, stats, cats, false);
+  }
+
+  const link = document.createElement('a');
+  link.download = `NEEDFLEA_zone_plan_${new Date().toISOString().slice(0,10)}.png`;
+  link.href = exportCanvas.toDataURL('image/png');
+  link.click();
+
+  booths.selectedId = prevSel;
+  booths.selectedIds = prevSelIds;
+  render(); // restore normal view
+}
+window.exportZonePlan = exportZonePlan;
+
+// Start polygon crop in the given mode ('plan' = 摊位图, 'zone' = 区域图)
+window.startCrop = function(mode) {
+  cropMode = mode === 'zone' ? 'zone' : 'plan';
+  setTool('crop');
+};
+
+// 摊位图 dropdown: run the chosen export, then reset the select back to its label
+window.exportPlanMenu = function(sel) {
+  const v = sel.value;
+  sel.selectedIndex = 0;
+  if (v === 'full') exportPNG();
+  else if (v === 'crop') startCrop('plan');
+};
+
+// 区域图 dropdown: full or cropped merged-region export (no booth counts)
+window.exportZoneMenu = function(sel) {
+  const v = sel.value;
+  sel.selectedIndex = 0;
+  if (v === 'full') exportZonePlan();
+  else if (v === 'crop') startCrop('zone');
+};
+
 function exportDXF() {
   const dxfStr = booths.toDXF(renderer.dxfData);
   const blob = new Blob([dxfStr], { type: 'application/dxf' });
@@ -2379,9 +2568,191 @@ function clearAutoSave() {
 }
 
 // ── SAVE / LOAD PROJECT ───────────────────────────────────────────────────────
+// ── PORTABLE VENUE EXPORT ─────────────────────────────────────
+// Embeds the loaded CAD base map into the project JSON in two portable forms:
+// (a) `venue.entities` — normalized geometry (world coords, resolved hex
+//     colors, degrees) that any software can draw without a CAD parser, and
+// (b) `venue.svg` — a ready-to-render snapshot of the base map with the booth
+//     overlay baked in, plus the pixel↔world transform.
+// Schema documented in README「项目 JSON 格式」.
+
+function _venueBounds() {
+  if (_dwgBounds) return { minX: _dwgBounds.minX, minY: _dwgBounds.minY, maxX: _dwgBounds.maxX, maxY: _dwgBounds.maxY };
+  const b = renderer.dxfData && renderer.dxfData.bounds;
+  return b ? { minX: b.minX, minY: b.minY, maxX: b.maxX, maxY: b.maxY } : null;
+}
+
+function _venueLayers() {
+  return Object.keys(_dwgLayerVisibility).map(name => ({
+    name,
+    color: _svgAciColors[Math.abs(_dwgLayerColors[name] || 7)] || '#FFFFFF',
+    visible: !!_dwgLayerVisibility[name],
+  }));
+}
+
+// Normalize both in-memory CAD formats (compact DWG extraction `{t:'L',…}`
+// and dxf-parser `{type:'LINE',…}`) into one documented schema.
+function _venueEntities() {
+  const r2 = n => Math.round(n * 100) / 100;
+  const dxfColor = e => {
+    const aci = (e.color !== null && e.color !== undefined && e.color !== 256)
+      ? Math.abs(e.color) : Math.abs(_dwgLayerColors[e.layer || '0'] || 7);
+    return _svgAciColors[aci] || '#FFFFFF';
+  };
+  const out = [];
+  for (const [layer, ents] of Object.entries(_dwgEntitiesByLayer)) {
+    for (const it of ents) {
+      if (it.t) { // compact DWG format (angles in radians)
+        if (it.t === 'L') out.push({ type: 'line', layer, color: it.c, lineType: it.lt || '', x1: r2(it.x1), y1: r2(it.y1), x2: r2(it.x2), y2: r2(it.y2) });
+        else if (it.t === 'P') out.push({ type: 'polyline', layer, color: it.c, lineType: it.lt || '', closed: !!it.closed, points: it.pts.map(p => [r2(p[0]), r2(p[1])]) });
+        else if (it.t === 'C') out.push({ type: 'circle', layer, color: it.c, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r) });
+        else if (it.t === 'A') out.push({ type: 'arc', layer, color: it.c, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r), startAngle: r2(it.sa * 180 / Math.PI), endAngle: r2(it.ea * 180 / Math.PI) });
+        else if (it.t === 'T') out.push({ type: 'text', layer, color: it.c, x: r2(it.x), y: r2(it.y), height: r2(it.h), angle: 0, text: it.text });
+      } else if (it.type) { // dxf-parser format (angles in degrees)
+        const color = dxfColor(it);
+        const lt = (it.lineType || '').trim().toLowerCase();
+        const lineType = (lt === 'continuous' || lt === 'bylayer' || lt === 'byblock') ? '' : lt;
+        if (it.type === 'LINE') out.push({ type: 'line', layer, color, lineType, x1: r2(it.x1), y1: r2(it.y1), x2: r2(it.x2), y2: r2(it.y2) });
+        else if (it.type === 'LWPOLYLINE' || it.type === 'POLYLINE') {
+          if (it.vertices && it.vertices.length >= 2)
+            out.push({ type: 'polyline', layer, color, lineType, closed: !!it.closed, points: it.vertices.map(v => [r2(v.x), r2(v.y)]) });
+        }
+        else if (it.type === 'CIRCLE') out.push({ type: 'circle', layer, color, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r) });
+        else if (it.type === 'ARC') out.push({ type: 'arc', layer, color, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r), startAngle: r2(it.startAngle), endAngle: r2(it.endAngle) });
+        else if (it.type === 'TEXT' || it.type === 'MTEXT') {
+          const text = (it.text || '').trim();
+          if (text) out.push({ type: 'text', layer, color, x: r2(it.x), y: r2(it.y), height: r2(it.height || 1), angle: r2(it.angle || 0), text });
+        }
+        else if (it.type === 'ELLIPSE') {
+          // sample into a polyline so consumers don't need ellipse math
+          const pts = [];
+          const t0 = it.startAngle, t1 = it.endAngle > t0 ? it.endAngle : it.endAngle + Math.PI * 2;
+          const nx = -it.my * it.ratio, ny = it.mx * it.ratio;
+          for (let k = 0; k <= 48; k++) {
+            const t = t0 + (t1 - t0) * k / 48;
+            pts.push([r2(it.cx + it.mx * Math.cos(t) + nx * Math.sin(t)), r2(it.cy + it.my * Math.cos(t) + ny * Math.sin(t))]);
+          }
+          out.push({ type: 'polyline', layer, color, lineType: '', closed: false, points: pts });
+        }
+        else if (it.type === 'SPLINE') {
+          const pts = (it.fitPoints && it.fitPoints.length >= 2) ? it.fitPoints : it.controlPoints;
+          if (pts && pts.length >= 2)
+            out.push({ type: 'polyline', layer, color, lineType: '', closed: false, points: pts.map(v => [r2(v.x), r2(v.y)]) });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// SVG snapshot: visible-layer base map (light theme) + annotation overlay.
+function _venueSVG(bounds, layers, entities) {
+  const bw = bounds.maxX - bounds.minX, bh = bounds.maxY - bounds.minY;
+  if (!(bw > 0 && bh > 0)) return null;
+  const width = Math.min(4000, Math.max(2000, Math.ceil(bw * 0.5)));
+  const height = Math.round(width * (bh / bw));
+  const scale = Math.min(width / bw, height / bh);
+  const offsetX = -bounds.minX * scale, offsetY = bounds.maxY * scale;
+  const px = x => (x * scale + offsetX).toFixed(1);
+  const py = y => (-y * scale + offsetY).toFixed(1);
+  const visible = new Set(layers.filter(l => l.visible).map(l => l.name));
+  const dash = lt => {
+    const da = _getDash(lt || '');
+    return da ? ` stroke-dasharray="${da}"` : '';
+  };
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" style="background:#ffffff">\n`;
+  svg += `<rect width="${width}" height="${height}" fill="#ffffff"/>\n`;
+
+  for (const e of entities) {
+    if (!visible.has(e.layer)) continue;
+    const c = _invertColorForLight(e.color);
+    if (e.type === 'line') svg += `<line x1="${px(e.x1)}" y1="${py(e.y1)}" x2="${px(e.x2)}" y2="${py(e.y2)}" stroke="${c}" stroke-width="0.6"${dash(e.lineType)} fill="none"/>\n`;
+    else if (e.type === 'polyline') {
+      const d = e.points.map((p, i) => `${i === 0 ? 'M' : 'L'}${px(p[0])},${py(p[1])}`).join(' ') + (e.closed ? ' Z' : '');
+      svg += `<path d="${d}" stroke="${c}" stroke-width="0.6"${dash(e.lineType)} fill="none"/>\n`;
+    }
+    else if (e.type === 'circle') svg += `<circle cx="${px(e.cx)}" cy="${py(e.cy)}" r="${(e.r * scale).toFixed(1)}" stroke="${c}" stroke-width="0.5" fill="none"/>\n`;
+    else if (e.type === 'arc') {
+      const sa = e.startAngle * Math.PI / 180, ea = e.endAngle * Math.PI / 180;
+      const x1 = e.cx + e.r * Math.cos(sa), y1 = e.cy + e.r * Math.sin(sa);
+      const x2 = e.cx + e.r * Math.cos(ea), y2 = e.cy + e.r * Math.sin(ea);
+      const la = Math.abs(ea - sa) > Math.PI ? 1 : 0, sw = ea > sa ? 0 : 1;
+      svg += `<path d="M${px(x1)},${py(y1)} A${(e.r * scale).toFixed(1)},${(e.r * scale).toFixed(1)} 0 ${la},${sw} ${px(x2)},${py(y2)}" stroke="${c}" stroke-width="0.5" fill="none"/>\n`;
+    }
+    else if (e.type === 'text') {
+      const fs = Math.max(4, Math.min(11, e.height * scale));
+      svg += `<text x="${px(e.x)}" y="${py(e.y)}" fill="${c}" font-size="${fs.toFixed(0)}" font-family="sans-serif">${_sanitizeSvg(e.text)}</text>\n`;
+    }
+  }
+
+  svg += _venueAnnotationsSVG(scale, offsetX, offsetY);
+  svg += `</svg>`;
+  return { width, height, scale, offsetX, offsetY, content: svg };
+}
+
+// Booths + guards/fire/arrows/lines/zone-text drawn over the base map,
+// mirroring the canvas styles closely enough to read as the same plan.
+function _venueAnnotationsSVG(scale, offsetX, offsetY) {
+  const px = x => (x * scale + offsetX).toFixed(1);
+  const py = y => (-y * scale + offsetY).toFixed(1);
+  let svg = `<marker id="nf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34a853"/></marker>\n`;
+  svg = `<defs>${svg}</defs>\n`;
+
+  for (const item of booths.items) {
+    if (item.type === 'booth') {
+      const col = booths.catColor(item.cat);
+      const cx = item.wx + item.ww / 2, cy = item.wy + item.wh / 2;
+      const sw = item.ww * scale, sh = item.wh * scale;
+      svg += `<g transform="translate(${px(cx)},${py(cy)}) rotate(${(-(item.angle || 0)).toFixed(2)})">`;
+      svg += `<rect x="${(-sw / 2).toFixed(1)}" y="${(-sh / 2).toFixed(1)}" width="${sw.toFixed(1)}" height="${sh.toFixed(1)}" rx="${(Math.min(sw, sh) * 0.12).toFixed(1)}" fill="${col.fill}" fill-opacity="0.85" stroke="${col.stroke}" stroke-width="1.2"/>`;
+      if (item.label) {
+        // keep text upright (counter-rotate), dark text with white halo like
+        // the canvas pill background
+        const fs = Math.max(6, Math.min(sw * 0.36, sh * 0.4, (sw * 0.92) / Math.max(1, item.label.length) * 1.6, 16));
+        svg += `<text transform="rotate(${(item.angle || 0).toFixed(2)})" x="0" y="0" text-anchor="middle" dominant-baseline="central" fill="#1a1a1a" stroke="#ffffff" stroke-width="${(fs * 0.25).toFixed(1)}" paint-order="stroke" font-weight="bold" font-size="${fs.toFixed(1)}" font-family="sans-serif">${_sanitizeSvg(item.label)}</text>`;
+      }
+      svg += `</g>\n`;
+    } else if (item.type === 'zone' && item.label) {
+      svg += `<text x="${px(item.wx)}" y="${py(item.wy)}" fill="#333333" font-weight="bold" font-size="14" font-family="sans-serif">${_sanitizeSvg(item.label)}</text>\n`;
+    } else if (item.type === 'guard') {
+      svg += `<text x="${px(item.wx)}" y="${py(item.wy)}" text-anchor="middle" dominant-baseline="central" font-size="14">👮</text>\n`;
+    } else if (item.type === 'fire') {
+      svg += `<text x="${px(item.wx)}" y="${py(item.wy)}" text-anchor="middle" dominant-baseline="central" font-size="14">🧯</text>\n`;
+    } else if (item.type === 'arrow') {
+      svg += `<line x1="${px(item.wx1)}" y1="${py(item.wy1)}" x2="${px(item.wx2)}" y2="${py(item.wy2)}" stroke="#34a853" stroke-width="2" stroke-dasharray="8 5" marker-end="url(#nf-arrow)"/>\n`;
+    } else if (item.type === 'line' && item.pts && item.pts.length >= 2) {
+      const d = item.pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${px(p[0])},${py(p[1])}`).join(' ') + (item.closed ? ' Z' : '');
+      const da = item.lineStyle === 'dashed' ? ' stroke-dasharray="10 6"' : '';
+      svg += `<path d="${d}" stroke="#5B8FE8" stroke-width="1.5"${da} fill="none"/>\n`;
+    }
+  }
+  return svg;
+}
+
+function _buildVenueExport() {
+  const bounds = _venueBounds();
+  if (!bounds) return null;
+  const entities = _venueEntities();
+  if (!entities.length) return null;
+  const layers = _venueLayers();
+  return {
+    schema: 'needflea-venue/1',
+    coordinateSystem: 'CAD world units, Y-up. meters = units × metersPerUnit. SVG pixel: px = x*svg.scale + svg.offsetX, py = -y*svg.scale + svg.offsetY',
+    metersPerUnit,
+    bounds,
+    layers,
+    entities,
+    svg: _venueSVG(bounds, layers, entities),
+  };
+}
+
 function saveProject() {
+  let venue = null;
+  try { venue = _buildVenueExport(); }
+  catch (e) { console.warn('venue export failed (saving without it):', e); }
   const data = {
-    version: 2,
+    version: 3,
     cadFile: _cadFileData,
     categories: booths.CAT_COLORS,
     items: booths.items,
@@ -2391,6 +2762,7 @@ function saveProject() {
     darkMode,
     layerVisibility: _dwgLayerVisibility,
     viewport: { offsetX: renderer.offsetX, offsetY: renderer.offsetY, scale: renderer.scale },
+    venue,
   };
   const json = JSON.stringify(data);
   const blob = new Blob([json], { type: 'application/json' });
@@ -2491,6 +2863,11 @@ function loadProject(input) {
       // Restore categories
       if (data.categories) {
         booths.CAT_COLORS = data.categories;
+        // Keep activeCat valid — the loaded project may not contain the
+        // default category, which would leave no selection and crash on place.
+        if (!booths.CAT_COLORS[activeCat]) {
+          activeCat = Object.keys(booths.CAT_COLORS)[0] || activeCat;
+        }
         renderLegend();
       }
       // Restore annotations

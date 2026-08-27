@@ -76,6 +76,46 @@ DWG 文件会自动从 `$INSUNITS` 读取单位（如毫米=1m:1000单位），�
 | 📤 DXF | 导出标注为 DXF（含 CAD 图层） |
 | 💾 底图DXF | 下载 ODA 转换的底图 DXF（分享给无 ODA 用户） |
 
+## 项目 JSON 格式（v3）
+
+保存的项目 JSON 是自包含的：除了原始 CAD 文件（`cadFile.base64`）和标注（`items`），
+v3 起还内嵌 `venue` 区块 —— 已解析好的场地底图，其他软件**无需 CAD 解析器**即可
+渲染出完整摊位图。
+
+```jsonc
+{
+  "version": 3,
+  "cadFile": { "name": "1F.dxf", "base64": "…" },   // 原始 CAD（本工具重载用）
+  "categories": { "二手": { "fill": "#5B8FE8", "stroke": "#3a6ec4" }, … },
+  "items": [ /* 摊位/安保/动线等标注，世界坐标 */ ],
+  "metersPerUnit": 0.001,                            // 世界单位 → 米
+  "venue": {
+    "schema": "needflea-venue/1",
+    "bounds": { "minX", "minY", "maxX", "maxY" },    // 世界坐标，Y 向上
+    "layers": [ { "name", "color", "visible" } ],
+    "entities": [                                     // 归一化几何，颜色已解析为 hex
+      { "type": "line",     "layer", "color", "lineType", "x1","y1","x2","y2" },
+      { "type": "polyline", "layer", "color", "lineType", "closed", "points": [[x,y],…] },
+      { "type": "circle",   "layer", "color", "cx","cy","r" },
+      { "type": "arc",      "layer", "color", "cx","cy","r", "startAngle","endAngle" }, // 度，逆时针
+      { "type": "text",     "layer", "color", "x","y", "height", "angle", "text" }
+    ],
+    "svg": {                                          // 现成的整图快照（底图+摊位）
+      "width", "height", "scale", "offsetX", "offsetY",
+      "content": "<svg …>"                            // px = x*scale+offsetX, py = -y*scale+offsetY
+    }
+  }
+}
+```
+
+摊位项：`{ type:'booth', wx, wy /*左上角*/, ww, wh, angle /*度，绕中心逆时针*/, cat, label }`，
+颜色查 `categories[cat]`。
+
+参考实现：`node render-project-json.mjs <project.json> [out.png]` —— 仅凭
+`venue.entities` + `items` 重建摊位图（不读 cadFile），可直接作为第三方接入范例。
+背景为图片的项目（场地照片模式）没有矢量底图，`venue` 为 `null`，图片在
+`cadFile.base64`（`isImage: true`）。
+
 ## 停止服务
 
 ```bash
