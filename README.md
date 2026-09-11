@@ -1,8 +1,13 @@
 # NEED!FLEA 摊位规划工具
 
-网页端 CAD 查看 + 摊位标注工具，支持 DXF/DWG 格式，本地运行。
+网页端 CAD 查看 + 摊位标注工具，支持 DXF/DWG 格式。
 
-## 快速启动
+**在线访问：https://booth-planner.pbrick.cn/**
+
+> 在线版为纯前端（GitHub Pages 部署），支持 DXF 与场景图；DWG 转换依赖本地
+> `dwg-server`，需按下方说明本地运行。
+
+## 快速启动（本地）
 
 ```bash
 cd needflea-booth-planner
