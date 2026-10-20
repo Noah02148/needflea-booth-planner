@@ -144,7 +144,7 @@ class DXFRenderer {
     ctx.clearRect(0, 0, W, H);
 
     // Background — respects theme (darkMode is a global)
-    ctx.fillStyle = (typeof darkMode !== 'undefined' && !darkMode) ? '#ffffff' : '#1e1e1e';
+    ctx.fillStyle = !this.isDarkMode() ? '#ffffff' : '#1e1e1e';
     ctx.fillRect(0, 0, W, H);
 
     if (!this.dxfData) return;
@@ -189,6 +189,10 @@ class DXFRenderer {
     ctx.drawImage(this.svgImage, screenX, screenY, screenW, screenH);
   }
 
+  isDarkMode() {
+    return this.darkMode ?? (typeof darkMode !== 'undefined' ? darkMode : true);
+  }
+
   _getEntityColor(entity) {
     let color;
     if (entity.color !== null && entity.color !== undefined && entity.color !== 256) {
@@ -200,7 +204,7 @@ class DXFRenderer {
       color = '#333333';
     }
     // In light mode, invert bright colors to dark
-    if (typeof darkMode !== 'undefined' && !darkMode) {
+    if (!this.isDarkMode()) {
       const r = parseInt(color.slice(1,3),16), g = parseInt(color.slice(3,5),16), b = parseInt(color.slice(5,7),16);
       if (r*0.299 + g*0.587 + b*0.114 > 180) return '#333333';
     }
@@ -212,7 +216,7 @@ class DXFRenderer {
     const color = this._getEntityColor(entity);
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
-    ctx.lineWidth = 0.8;
+    ctx.lineWidth = this.lineWidth ?? 0.8;
     ctx.setLineDash([]);
     if (entity.lineType) {
       const lt = entity.lineType.trim().toUpperCase();

@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NEED! FLEA — 摊位规划工具</title>
+<link rel="stylesheet" href="environment.css?v=6">
+<script type="importmap">
+{"imports":{"three":"./vendor/three/three.module.js"}}
+</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -274,6 +278,7 @@
   </select>
   <button class="tb-btn" onclick="exportDXF()">📤 DXF</button>
   <button class="tb-btn" id="btn-3d" onclick="toggle3DView()">🧊 3D</button>
+  <button class="tb-btn" id="btn-environment" onclick="openEnvironment()">🏛 场地环境</button>
   <button class="tb-btn" onclick="downloadConvertedDXF()">💾 底图DXF</button>
   <button class="tb-btn danger" onclick="clearAnnotations()">🗑 清空</button>
 </div>
@@ -423,10 +428,11 @@
 </script>
 
 <script src="libdxfrw.js"></script>
-<script src="dxf-parser.js?v=7"></script>
-<script src="renderer.js?v=7"></script>
+<script src="dxf-parser.js?v=8"></script>
+<script src="renderer.js?v=8"></script>
 <script src="booth.js?v=8"></script>
 <script src="iso-renderer.js?v=1"></script>
-<script src="app.js?v=14"></script>
+<script src="app.js?v=16"></script>
+<script src="environment.js?v=6"></script>
 </body>
 </html>

@@ -117,6 +117,10 @@ new ResizeObserver(resize).observe(wrap);
 
 // ── RENDER ───────────────────────────────────────────────────────────────────
 function render() {
+  if (_3dMode && window.environmentUI) {
+    window.environmentUI.render();
+    return;
+  }
   if (_3dMode && _isoRenderer) {
     _isoRenderer.render(booths, metersPerUnit, darkMode);
     return;
@@ -139,6 +143,7 @@ function render() {
   }
   updateStatusBar();
   updateStats();
+  window.environmentUI?.drawPhotoMarkers(ctx, renderer);
 }
 
 function _drawEraserMarks() {
@@ -1267,6 +1272,7 @@ function onDXFParsed(dxfData) {
     return;
   }
   renderer.load(dxfData);
+  _setupDxfLayerState(dxfData);
   dxfLoaded = true;
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('btn-calib').disabled = false;
@@ -1277,10 +1283,12 @@ function onDXFParsed(dxfData) {
 }
 
 function _clearAnnotationsIfNeeded() {
-  if (booths.items.length > 0 || eraserMarks.length > 0) {
-    if (confirm(`检测到已有 ${booths.items.length} 个标注。\n加载新底图前是否清空全部标注？\n（点取消则保留现有标注）`)) {
+  const environmentCount = window.environmentUI?.snapshot().objects.length || 0;
+  if (booths.items.length > 0 || eraserMarks.length > 0 || environmentCount > 0) {
+    if (confirm(`检测到已有 ${booths.items.length} 个标注、${environmentCount} 个环境对象。\n加载新底图前是否清空标注与场地环境？\n（点取消则保留现有数据，请确认新旧坐标一致）`)) {
       booths.clearAll();
       eraserMarks = [];
+      window.environmentUI?.restore(null);
     }
   }
 }
@@ -1515,6 +1523,7 @@ function updateScaleInfo() {
 
 // ── TOOL MANAGEMENT ──────────────────────────────────────────────────────────
 function setTool(t) {
+  if (t !== 'photo-camera') window.environmentUI?.cancelPhotoPlacement(false);
   tool = t;
   const hints = {
     select: '点击选择 · Shift多选 · 拖动移动 · R/L旋转 · 右键删除',
@@ -1594,6 +1603,7 @@ canvas.addEventListener('mousedown', e => {
   }
 
   if (e.button === 2) return; // handled in contextmenu
+  if (e.button === 0 && window.environmentUI?.photoPointerDown(wx, wy)) { e.preventDefault(); return; }
 
   // Eraser mode
   if (tool === 'eraser') {
@@ -1836,6 +1846,8 @@ canvas.addEventListener('mousemove', e => {
     render(); return;
   }
 
+  if (window.environmentUI?.photoPointerMove(wx, wy)) return;
+
   if (dragging && dragItem) {
     // Calculate movement delta from the primary drag item
     const newWx = wx - dragOffset.dwx;
@@ -2038,6 +2050,7 @@ canvas.addEventListener('mouseup', e => {
 
 canvas.addEventListener('contextmenu', e => {
   e.preventDefault();
+  if (window.environmentUI?.isPhotoPositioning()) { window.environmentUI.cancelPhotoPlacement(); return; }
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
   const hit = booths.hitTest(wx, wy, renderer.scale);
   if (hit) {
@@ -2074,6 +2087,7 @@ canvas.addEventListener('wheel', e => {
 
 // Double-click to fit view
 canvas.addEventListener('dblclick', e => {
+  if (window.environmentUI?.isPhotoPositioning()) { e.preventDefault(); return; }
   if (tool === 'line' && lineState && lineState.pts.length >= 2) {
     e.preventDefault();
     if (lineState.pts.length > 2) lineState.pts.pop(); // remove extra click from dblclick
@@ -2106,6 +2120,8 @@ canvas.addEventListener('dblclick', e => {
 
 // Esc key to exit measure / calibration
 document.addEventListener('keydown', e => {
+  if (window.environmentUI?.isPhotoPositioning()) return; // Photo marker handles Esc; do not edit selected booths.
+  if (e.key !== 'Escape' && e.target.closest?.('#environment-panel')) return;
   if (e.key === 'Escape') {
     if (tool === 'measure') { measureState = null; setTool('select'); render(); }
     else if (tool === 'dim') { dimState = null; setTool('select'); render(); }
@@ -2431,6 +2447,10 @@ function updateStatusBar() {
 
 // ── EXPORT ───────────────────────────────────────────────────────────────────
 function exportPNG() {
+  if (_3dMode && window.environmentUI) {
+    window.environmentUI.exportPNG();
+    return;
+  }
   // Render clean (no selection highlights)
   const prevSel = booths.selectedId;
   const prevSelIds = new Set(booths.selectedIds);
@@ -2753,6 +2773,7 @@ function saveProject() {
   catch (e) { console.warn('venue export failed (saving without it):', e); }
   const data = {
     version: 3,
+    environment: window.environmentUI ? window.environmentUI.snapshot() : undefined,
     cadFile: _cadFileData,
     categories: booths.CAT_COLORS,
     items: booths.items,
@@ -2782,6 +2803,9 @@ function loadProject(input) {
     try {
       const data = JSON.parse(e.target.result);
       if (!data.version || !data.items) { alert('无效的项目文件'); return; }
+      // Validate the optional environment before changing the current project.
+      const loadedEnvironment = window.environmentUI?.validate(data.environment);
+      if (_3dMode && window.environmentUI) window.environmentUI.close();
 
       document.getElementById('tool-hint').textContent = '正在载入项目…';
 
@@ -2871,6 +2895,7 @@ function loadProject(input) {
         renderLegend();
       }
       // Restore annotations
+      window.environmentUI?.restore(loadedEnvironment);
       booths.items = data.items || [];
       booths.nextId = data.nextId || (booths.items.length ? Math.max(...booths.items.map(i => i.id)) + 1 : 1);
       booths.selectedId = null;

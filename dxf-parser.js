@@ -253,11 +253,13 @@ class DXFParser {
     // duplicate floor plans or title blocks at different coordinates.
     const findMainCluster = (arr) => {
       const n = arr.length;
-      if (n < 10) return { lo: arr[0], hi: arr[n - 1] };
+      // Small drawings do not have enough samples for percentile clustering.
+      // In particular ceil(n * .95) may equal n and produce NaN bounds.
+      if (n < 20) return { lo: arr[0], hi: arr[n - 1] };
 
       // Find the biggest gap (skip top/bottom 5% to avoid outlier-induced gaps)
       const safeStart = Math.floor(n * 0.05);
-      const safeEnd = Math.ceil(n * 0.95);
+      const safeEnd = Math.min(n - 1, Math.ceil(n * 0.95));
       let maxGap = 0, gapIdx = -1;
       for (let i = safeStart; i < safeEnd; i++) {
         const gap = arr[i + 1] - arr[i];
