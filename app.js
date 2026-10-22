@@ -631,12 +631,7 @@ async function ensureLibDxfrw() {
 const _svgAciColors = {1:'#FF0000',2:'#FFFF00',3:'#00FF00',4:'#00FFFF',5:'#0000FF',6:'#FF00FF',7:'#FFFFFF',8:'#808080',9:'#c0c0c0',10:'#FF0000',30:'#FF7F00',40:'#7F3F00',50:'#7F7F00',70:'#007F00',130:'#007F7F',150:'#00007F',190:'#7F007F',250:'#333',251:'#555',252:'#777',253:'#999',254:'#BBB',255:'#DDD'};
 
 function _fixText(s) {
-  if (!s) return '';
-  try {
-    const bytes = new Uint8Array(s.length);
-    for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i) & 0xFF;
-    return new TextDecoder('gbk').decode(bytes);
-  } catch(e) { return s; }
+  return CADText.decode(s, true);
 }
 
 function _sanitizeSvg(s) {
@@ -789,8 +784,9 @@ function _extractEntityForSvg(lib, e, layerColors, layerLT) {
   try {
     if (e.eType == lib.DRW_ETYPE.TEXT || e.eType == lib.DRW_ETYPE.MTEXT) {
       const bp = e.basePoint; let text = _fixText(e.text || '');
-      text = text.replace(/\\P/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\\[a-zA-Z][^;]*;/g, '').trim();
-      if (text) return { t: 'T', x: bp.x, y: bp.y, text, h: e.height || 1, c: hex, layer };
+      text = CADText.plain(text).trim();
+      const mtext = e.eType == lib.DRW_ETYPE.MTEXT;
+      if (text) return { t: 'T', x: bp.x, y: bp.y, text, h: e.height || 1, angle: e.angle || 0, widthScale: mtext ? 1 : e.widthScale || 1, textWidth: mtext ? e.widthScale || 0 : 0, attachment: mtext ? e.textGen || 1 : 0, lineSpacing: mtext ? e.interlin || 1 : 1, c: hex, layer };
     }
     if (e.eType == lib.DRW_ETYPE.LINE) {
       const bp = e.basePoint, sp = e.secPoint;
@@ -831,7 +827,7 @@ function _expandInsert(ins, blockDefs, output, depth) {
     if (e.t === 'P') { output.push({ t: 'P', pts: e.pts.map(p => tf(p[0], p[1])), closed: e.closed, c: e.c, lt: e.lt, layer: ly }); }
     if (e.t === 'C') { const [cx,cy] = tf(e.cx, e.cy); output.push({ t: 'C', cx, cy, r: e.r * Math.abs(ins.sx), c: e.c, layer: ly }); }
     if (e.t === 'A') { const [cx,cy] = tf(e.cx, e.cy); output.push({ t: 'A', cx, cy, r: e.r * Math.abs(ins.sx), sa: e.sa + ins.angle, ea: e.ea + ins.angle, c: e.c, layer: ly }); }
-    if (e.t === 'T') { const [x,y] = tf(e.x, e.y); output.push({ t: 'T', x, y, text: e.text, h: e.h * Math.abs(ins.sy), c: e.c, layer: ly }); }
+    if (e.t === 'T') { const [x,y] = tf(e.x, e.y); output.push({ ...e, x, y, h: e.h * Math.abs(ins.sy), angle: (e.angle || 0) + ins.angle, textWidth: (e.textWidth || 0)*Math.abs(ins.sx), widthScale: (e.widthScale || 1)*Math.abs(ins.sx/ins.sy), layer: ly }); }
     if (e.t === 'I') { const [x,y] = tf(e.x, e.y); _expandInsert({ ...e, x, y, sx: e.sx * ins.sx, sy: e.sy * ins.sy, angle: e.angle + ins.angle, layer: ly }, blockDefs, output, depth + 1); }
   });
 }
@@ -865,11 +861,12 @@ async function parseDWGtoSVG(arrayBuffer) {
   }
 
   // Read layer info
-  const layerColors = {}, layerLT = {};
+  const layerColors = {}, layerLT = {}, layerVisibility = {};
   for (let i = 0; i < db.layers.size(); i++) {
     const l = db.layers.get(i);
     layerColors[l.name] = Math.abs(l.color);
     layerLT[l.name] = (l.lineType || '').trim();
+    layerVisibility[l.name] = l.color >= 0 && !(l.flags & 1);
   }
 
   // Store layer colors globally for the layer panel
@@ -974,14 +971,14 @@ async function parseDWGtoSVG(arrayBuffer) {
     const layer = it.layer || '0';
     if (!_dwgEntitiesByLayer[layer]) _dwgEntitiesByLayer[layer] = [];
     _dwgEntitiesByLayer[layer].push(it);
-    // Default: hide ceiling/MEP/construction layers
-    _dwgLayerVisibility[layer] = _isDefaultVisibleLayer(layer);
+    // Respect the drawing's off/frozen state, rather than guessing by layer name.
+    _dwgLayerVisibility[layer] = layerVisibility[layer] !== false;
   });
 
   // Also ensure layers from the DWG layer table appear (even if empty)
   for (const name of Object.keys(_dwgLayerColors)) {
     if (!(_dwgLayerVisibility.hasOwnProperty(name))) {
-      _dwgLayerVisibility[name] = _isDefaultVisibleLayer(name);
+      _dwgLayerVisibility[name] = layerVisibility[name] !== false;
     }
   }
 
@@ -1078,8 +1075,11 @@ function generateSVGFromLayers() {
       svg += `<path d="M${sxf(x1)},${syf(y1)} A${(it.r * sc).toFixed(1)},${(it.r * sc).toFixed(1)} 0 ${la},${sw} ${sxf(x2)},${syf(y2)}" stroke="${c}" stroke-width="0.5" fill="none"/>\n`;
     }
     if (it.t === 'T') {
-      const fs = Math.max(4, Math.min(11, it.h * sc));
-      if (fs >= 4) svg += `<text x="${sxf(it.x)}" y="${syf(it.y)}" fill="${c}" font-size="${fs.toFixed(0)}" font-family="sans-serif">${_sanitizeSvg(it.text)}</text>\n`;
+      const layout = CADText.layout(ctx, it, sc);
+      if (layout.size >= 0.5) {
+        const lines = layout.lines.map((line, i) => `<tspan x="${layout.x / layout.widthScale}" y="${layout.y+i*layout.spacing}">${_sanitizeSvg(line)}</tspan>`).join('');
+        svg += `<text transform="translate(${sxf(it.x)} ${syf(it.y)}) rotate(${-(it.angle || 0)*180/Math.PI}) scale(${layout.widthScale} 1)" fill="${c}" font-size="${layout.size}" font-family="Microsoft YaHei, PingFang SC, sans-serif">${lines}</text>\n`;
+      }
     }
   });
   svg += `</svg>`;
@@ -1198,11 +1198,11 @@ function _regenerateSvgBackground() {
 
   // DXF path: re-render with filtered entities
   if (_dxfFullData) {
-    const filtered = { ..._dxfFullData, entities: [] };
+    const filtered = { ..._dxfFullData, entities: [], layers: Object.fromEntries(Object.entries(_dxfFullData.layers).map(([name, layer]) => [name, { ...layer, visible: _dwgLayerVisibility[name] !== false }])) };
     if (_dxfFullData.entities) {
       filtered.entities = _dxfFullData.entities.filter(ent => {
         const ln = ent.layer || '0';
-        return _dwgLayerVisibility[ln] !== false;
+        return _dwgLayerVisibility[ln] !== false && (ent.sourceLayers || []).every(layer => _dwgLayerVisibility[layer] !== false);
       });
     }
     const savedOx = renderer.offsetX, savedOy = renderer.offsetY, savedScale = renderer.scale;
@@ -1411,7 +1411,7 @@ function loadCADFile(input) {
     const reader = new FileReader();
     reader.onload = e => {
       try {
-        const content = e.target.result;
+        const content = CADText.readBytes(e.target.result);
         // Store raw file for project save
         _cadFileData = { name: file.name || 'file.dxf', base64: btoa(unescape(encodeURIComponent(content))) };
         // Detect mislabeled DWG files (e.g. .dxf extension but actually DWG binary)
@@ -1426,7 +1426,7 @@ function loadCADFile(input) {
         console.error(err);
       }
     };
-    reader.readAsText(file, 'UTF-8');
+    reader.readAsArrayBuffer(file);
   }
   // Reset input so same file can be reloaded
   input.value = '';
@@ -2624,12 +2624,13 @@ function _venueEntities() {
   const out = [];
   for (const [layer, ents] of Object.entries(_dwgEntitiesByLayer)) {
     for (const it of ents) {
+      const first = out.length;
       if (it.t) { // compact DWG format (angles in radians)
         if (it.t === 'L') out.push({ type: 'line', layer, color: it.c, lineType: it.lt || '', x1: r2(it.x1), y1: r2(it.y1), x2: r2(it.x2), y2: r2(it.y2) });
         else if (it.t === 'P') out.push({ type: 'polyline', layer, color: it.c, lineType: it.lt || '', closed: !!it.closed, points: it.pts.map(p => [r2(p[0]), r2(p[1])]) });
         else if (it.t === 'C') out.push({ type: 'circle', layer, color: it.c, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r) });
         else if (it.t === 'A') out.push({ type: 'arc', layer, color: it.c, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r), startAngle: r2(it.sa * 180 / Math.PI), endAngle: r2(it.ea * 180 / Math.PI) });
-        else if (it.t === 'T') out.push({ type: 'text', layer, color: it.c, x: r2(it.x), y: r2(it.y), height: r2(it.h), angle: 0, text: it.text });
+        else if (it.t === 'T') out.push({ type: 'text', layer, color: it.c, x: r2(it.x), y: r2(it.y), height: r2(it.h), angle: r2((it.angle || 0)*180/Math.PI), text: it.text, widthScale: it.widthScale, textWidth: it.textWidth, attachment: it.attachment, lineSpacing: it.lineSpacing });
       } else if (it.type) { // dxf-parser format (angles in degrees)
         const color = dxfColor(it);
         const lt = (it.lineType || '').trim().toLowerCase();
@@ -2641,9 +2642,10 @@ function _venueEntities() {
         }
         else if (it.type === 'CIRCLE') out.push({ type: 'circle', layer, color, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r) });
         else if (it.type === 'ARC') out.push({ type: 'arc', layer, color, cx: r2(it.cx), cy: r2(it.cy), r: r2(it.r), startAngle: r2(it.startAngle), endAngle: r2(it.endAngle) });
-        else if (it.type === 'TEXT' || it.type === 'MTEXT') {
+        else if (it.type === 'TEXT' || it.type === 'MTEXT' || it.type === 'ATTRIB') {
           const text = (it.text || '').trim();
-          if (text) out.push({ type: 'text', layer, color, x: r2(it.x), y: r2(it.y), height: r2(it.height || 1), angle: r2(it.angle || 0), text });
+          const aligned = it.type !== 'MTEXT' && (it.hAlign || it.vAlign) && ![3, 5].includes(it.hAlign) && Number.isFinite(it.alignX) && Number.isFinite(it.alignY);
+          if (text) out.push({ type: 'text', layer, color, x: r2(aligned ? it.alignX : it.x), y: r2(aligned ? it.alignY : it.y), height: r2(it.height || 1), angle: r2(it.angle || 0), text, textTransform: it.textTransform, widthScale: it.widthScale, textWidth: it.textWidth, attachment: it.attachment, hAlign: it.hAlign, vAlign: it.vAlign, textGen: it.textGen, lineSpacing: it.lineSpacing });
         }
         else if (it.type === 'ELLIPSE') {
           // sample into a polyline so consumers don't need ellipse math
@@ -2662,6 +2664,7 @@ function _venueEntities() {
             out.push({ type: 'polyline', layer, color, lineType: '', closed: false, points: pts.map(v => [r2(v.x), r2(v.y)]) });
         }
       }
+      for (let i = first; i < out.length; i++) if (it.sourceLayers?.length > 1) out[i].sourceLayers = it.sourceLayers;
     }
   }
   return out;
@@ -2687,7 +2690,7 @@ function _venueSVG(bounds, layers, entities) {
   svg += `<rect width="${width}" height="${height}" fill="#ffffff"/>\n`;
 
   for (const e of entities) {
-    if (!visible.has(e.layer)) continue;
+    if (!visible.has(e.layer) || e.sourceLayers?.some(layer => !visible.has(layer))) continue;
     const c = _invertColorForLight(e.color);
     if (e.type === 'line') svg += `<line x1="${px(e.x1)}" y1="${py(e.y1)}" x2="${px(e.x2)}" y2="${py(e.y2)}" stroke="${c}" stroke-width="0.6"${dash(e.lineType)} fill="none"/>\n`;
     else if (e.type === 'polyline') {
@@ -2703,8 +2706,12 @@ function _venueSVG(bounds, layers, entities) {
       svg += `<path d="M${px(x1)},${py(y1)} A${(e.r * scale).toFixed(1)},${(e.r * scale).toFixed(1)} 0 ${la},${sw} ${px(x2)},${py(y2)}" stroke="${c}" stroke-width="0.5" fill="none"/>\n`;
     }
     else if (e.type === 'text') {
-      const fs = Math.max(4, Math.min(11, e.height * scale));
-      svg += `<text x="${px(e.x)}" y="${py(e.y)}" fill="${c}" font-size="${fs.toFixed(0)}" font-family="sans-serif">${_sanitizeSvg(e.text)}</text>\n`;
+      const layout = CADText.layout(ctx, e, scale);
+      const m = e.textTransform;
+      const rotation = m ? `matrix(${m[0]} ${-m[1]} ${-m[2]} ${m[3]} 0 0)` : `rotate(${-(e.angle || 0)})`;
+      const mirrorX = e.textGen & 2 ? -1 : 1, mirrorY = e.textGen & 4 ? -1 : 1;
+      const lines = layout.lines.map((line, i) => `<tspan x="${layout.x/layout.widthScale}" y="${layout.y+i*layout.spacing}">${_sanitizeSvg(line)}</tspan>`).join('');
+      svg += `<text transform="translate(${px(e.x)} ${py(e.y)}) ${rotation} scale(${layout.widthScale*mirrorX} ${mirrorY})" fill="${c}" font-size="${layout.size}" font-family="Microsoft YaHei, PingFang SC, sans-serif">${lines}</text>\n`;
     }
   }
 
@@ -2877,7 +2884,7 @@ async function applyProjectData(data) {
       }
     } else {
       // Parse DXF
-      const content = new TextDecoder().decode(bytes);
+      const content = CADText.readBytes(bytes);
       const dxfData = parser.parse(content);
       renderer.load(dxfData);
       _setupDxfLayerState(dxfData);

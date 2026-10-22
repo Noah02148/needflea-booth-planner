@@ -27,7 +27,7 @@ NEED!FLEA 摊位规划工具：浏览器端 CAD 查看、场景图导入、摊�
 - `preview.js`、`test-render*.js`、本机 `test-*.mjs`：渲染实验与人工验证脚本，不是统一测试套件。
 
 浏览器脚本是经典脚本而非 ES modules，按以下顺序加载：
-`libdxfrw.js` → `dxf-parser.js` → `renderer.js` → `booth.js` → `iso-renderer.js` → `app.js`。
+`libdxfrw.js` → `cad-text.js` → `dxf-parser.js` → `renderer.js` → `booth.js` → `iso-renderer.js` → `app.js`。
 保留全局类、页面内联事件调用的 `window` 入口及加载顺序；不要直接套用模块化构建工具。
 
 新增场地环境功能是局部例外：`environment.js` 在 `app.js` 后以 ES module 加载（共享 Marble contract 和 UI），通过动态导入 `scene-three.js` 使用 Three.js；`index.html` 的 import map 指向 `vendor/three/` 和 `vendor/spark/` 的固定版本。不要将现有经典 CAD 主脚本全部迁移为模块。`environment.css` 提供环境面板样式及工具栏溢出处理。
@@ -93,6 +93,8 @@ node dwg-server.mjs
 
 ## 验证方式
 
+CAD 导入 / 文字 / 块变更运行 `node scripts/check-cad-import.mjs`（3002 静态服务）。`cad-text.js` 共享 GBK / Unicode / CAD 转义处理、MTEXT 正文及换行和文字布局；不能把真实 Unicode 截断为低字节，不能删掉格式括号内正文或统一放大小字。DXFParser 输出递归展开后的世界坐标叶实体，保留 sourceLayers 父层可见性链；textTransform 保留块变换后的文字基向量。OCS / elevation 必须在块变换前处理，图层初始状态遵循 off / frozen，用户开关可覆盖。normalized venue 的文字可携带可选 textTransform / widthScale / textWidth / attachment / hAlign / vAlign / textGen / lineSpacing，原 v3 结构保持兼容。可选 NEEDFLEA_DWG_FILE 指向演艺中心真实样本，依赖 ODA 本地服务，样本不得入库。
+
 场地库或共享项目 I/O 改动运行 `node scripts/check-site-library.mjs`（3002 静态服务），覆盖 v1 升级迁移、多活动隔离、JSON / 空布局 / 当前画布创建、基础与活动独立更新、刷新载入、未保存取消、无底图继承、无效导入、事务失败恢复、活动备份与移动端排版。DWG 无样本时须明确未验证。共享保存载入改动同时运行环境、面板和 Marble 回归。
 
 Marble 变更运行 `node scripts/check-marble.mjs`（先启动 3002 静态服务）：模拟官方 API，无真实费用，生成真实合成 SPZ 检查 Spark 渲染、相机 / CAD 选点、比例与坐标变换、预览应用、旧项目清理、任务幂等和重启恢复。涉及三维时同时运行现有三组环境 / Codex 检查并查看截图。真实 API 验证必须区分不计费的余额查询与会计费的生成；不自动用用户照片付费生成。
@@ -119,4 +121,4 @@ Marble 变更运行 `node scripts/check-marble.mjs`（先启动 3002 静态服�
 
 - 本次整理前 Git 工作区干净。最近业务提交 `10d9931` 增加复合摊位（盘扣架/帐篷＋空地）、邻近吸附时的支架角位、分类颜色兜底及自包含项目 JSON；后续提交主要更新域名与 README。
 - README 记录 GitHub Pages 静态部署，`CNAME` 指向 `booth-planner.pbrick.cn`。线上是否可达不由本地文件保证；不要为普通开发任务改动域名或部署配置。
-- README 列出的已知限制：DXF 解析路径的嵌套 INSERT 展开、DIMENSION 文字和复杂 HATCH 渲染存在不足；WASM 对部分 DWG 版本/文件可能解析失败。遇到兼容性问题时先确认所走解析路径与样本，不假设所有 CAD 实体都受支持。
+- README 列出的已知限制：动态块 / 外部参照、缺失匿名块的 DIMENSION、复杂 HATCH 与 CAD 专用字体仍可能显示不完整；WASM 对部分 DWG 版本/文件可能解析失败。遇到兼容性问题时先确认所走解析路径与样本，不假设所有 CAD 实体都受支持。

@@ -159,7 +159,10 @@ class DXFRenderer {
       this._drawSvgBackground();
     } else {
       // Entity-by-entity rendering (DXF text file path)
-      this.dxfData.entities.forEach(e => this._drawEntity(e));
+      this.dxfData.entities.forEach(e => {
+        if (e.visible === false || (e.sourceLayers || [e.layer]).some(layer => this.dxfData.layers[layer]?.visible === false)) return;
+        this._drawEntity(e);
+      });
     }
 
     ctx.restore();
@@ -246,9 +249,14 @@ class DXFRenderer {
         ctx.beginPath();
         e.vertices.forEach((v, idx) => {
           if (idx === 0) ctx.moveTo(this.wx(v.x), this.wy(v.y));
+          else if (e.vertices[idx-1].bulge) this._drawBulgeArc(ctx, e.vertices[idx-1], v, e.vertices[idx-1].bulge);
           else ctx.lineTo(this.wx(v.x), this.wy(v.y));
         });
-        if (e.closed) ctx.closePath();
+        if (e.closed) {
+          const last = e.vertices[e.vertices.length-1];
+          if (last.bulge) this._drawBulgeArc(ctx, last, e.vertices[0], last.bulge);
+          ctx.closePath();
+        }
         ctx.stroke();
         break;
 
@@ -269,15 +277,22 @@ class DXFRenderer {
       }
 
       case 'TEXT':
+      case 'ATTRIB':
       case 'MTEXT': {
-        const fontSize = Math.max(8, e.height * this.scale);
-        if (fontSize < 3) break;
-        ctx.font = `${fontSize}px sans-serif`;
+        const layout = CADText.layout(ctx, e, this.scale);
+        const matrix = e.textTransform;
+        const magnification = matrix ? Math.max(Math.hypot(matrix[0], matrix[1]), Math.hypot(matrix[2], matrix[3])) : 1;
+        if (layout.size * magnification < 0.5) break;
         ctx.fillStyle = this._getEntityColor(e);
         ctx.save();
-        ctx.translate(this.wx(e.x), this.wy(e.y));
-        if (e.angle) ctx.rotate(-e.angle * Math.PI / 180);
-        ctx.fillText(e.text || '', 0, 0);
+        const aligned = e.type !== 'MTEXT' && (e.hAlign || e.vAlign) && ![3, 5].includes(e.hAlign) && Number.isFinite(e.alignX) && Number.isFinite(e.alignY);
+        ctx.translate(this.wx(aligned ? e.alignX : e.x), this.wy(aligned ? e.alignY : e.y));
+        if (matrix) ctx.transform(matrix[0], -matrix[1], -matrix[2], matrix[3], 0, 0);
+        else if (e.angle) ctx.rotate(-e.angle * Math.PI / 180);
+        if (e.textGen) ctx.scale(e.textGen & 2 ? -1 : 1, e.textGen & 4 ? -1 : 1);
+        ctx.scale(layout.widthScale, 1);
+        ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        layout.lines.forEach((line, i) => ctx.fillText(line, layout.x / layout.widthScale, layout.y + i*layout.spacing));
         ctx.restore();
         break;
       }
@@ -331,7 +346,7 @@ class DXFRenderer {
     const cx = mx + sign * d * nx, cy = my + sign * d * ny;
     const startAngle = Math.atan2(v1.y - cy, v1.x - cx);
     const endAngle = Math.atan2(v2.y - cy, v2.x - cx);
-    const ccw = bulge < 0;
+    const ccw = bulge > 0;
     ctx.arc(this.wx(cx), this.wy(cy), r * this.scale, -startAngle, -endAngle, ccw);
   }
 }
