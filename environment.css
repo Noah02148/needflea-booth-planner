@@ -11,28 +11,16 @@
 #environment-panel p { color: var(--text2); line-height: 1.7; margin: 8px 0 12px; }
 .env-section { border-top: 1px solid var(--border); padding-top: 16px; margin-top: 16px; }
 .env-section h3 { font-size: 13px; margin-bottom: 12px; }
+.env-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 16px 0; }
+#environment-panel .env-methods [aria-selected="true"] { color: #fff; background: #23805e; border-color: #23805e; }
+.env-methods button:focus-visible { outline: 2px solid #23805e; outline-offset: 3px; }
+.env-method-note { padding: 10px; background: var(--bg3); border-radius: 7px; }
+#env-manual-panel[hidden], #env-marble-panel[hidden] { display: none; }
+.env-data-tools summary { cursor: pointer; font-weight: 600; }
 #environment-panel label { display: block; margin: 8px 0; color: var(--text2); }
 #environment-panel input[type=number], #environment-panel textarea { width: 100%; border: 1px solid var(--border2); border-radius: 5px; padding: 7px; background: var(--bg); color: var(--text); font: inherit; margin-top: 5px; }
 #environment-panel select { display: block; width: 100%; padding: 7px; margin-top: 5px; border: 1px solid var(--border2); border-radius: 5px; background: var(--bg); color: var(--text); }
 #environment-panel button:disabled, #environment-panel input:disabled, #environment-panel select:disabled, #environment-panel textarea:disabled { opacity: .5; cursor: default; }
-#env-generate, #env-ai-apply { background: #23805e !important; color: #fff !important; }
-#environment-panel #env-ai-status { min-height: 62px; padding: 10px; border-radius: 6px; background: var(--bg3); overflow-wrap: anywhere; }
-#environment-panel #env-ai-status.env-ai-error { color: #b3452c; background: #e2755014; border: 1px solid #b3452c40; }
-#env-ai-preview { padding: 12px; border: 1px solid #5fa88e; border-radius: 8px; background: #4bc98a0a; margin-top: 12px; }
-#env-ai-report h4 { margin: 10px 0 5px; font-size: 12px; }
-#env-ai-report ul { padding-left: 17px; color: var(--text2); line-height: 1.7; margin-bottom: 8px; }
-.env-preview-actions { margin-top: 12px; }
-#env-ai-progress { border: 1px solid var(--border); border-radius: 7px; padding: 11px; margin: 10px 0; font-size: 11px; }
-.env-progress-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--text2); }
-#env-ai-steps { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 8px; color: var(--text3); }
-#env-ai-steps li::before { content: '○ '; }
-#env-ai-steps li.done { color: #23805e; }
-#env-ai-steps li.done::before { content: '✓ '; }
-#env-ai-steps li.active { color: #23805e; font-weight: 600; }
-#env-ai-steps li.active::before { content: '● '; }
-#env-ai-progress p { margin-bottom: 6px; }
-#env-ai-log { padding-left: 16px; line-height: 1.8; color: var(--text2); max-height: 140px; overflow-y: auto; }
-#env-ai-progress summary { cursor: pointer; color: var(--text2); }
 #environment-panel textarea { resize: vertical; }
 #environment-panel input[type=color] { display: block; width: 100%; height: 32px; background: transparent; border: 0; margin-top: 5px; }
 .env-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
@@ -65,3 +53,21 @@
 #topbar::-webkit-scrollbar { display: none; }
 #topbar > * { flex-shrink: 0; }
 #environment-panel [hidden] { display: none !important; }
+.env-marble-section { border: 1px solid #65a590; padding: 14px; border-radius: 9px; background: #4bc98a08; }
+#marble-generate, #marble-apply { background: #23805e !important; color: white !important; }
+#marble-status, #marble-job-status, #marble-render-status { overflow-wrap: anywhere; }
+#marble-history button { display: block; width: 100%; margin: 6px 0; font-size: 10px; }
+#marble-controls { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
+.env-marble-section summary { cursor: pointer; margin: 10px 0; }
+#environment-panel input[type=text] { width: 100%; padding: 7px; color: var(--text); background: var(--bg); border: 1px solid var(--border2); border-radius: 5px; }
+#marble-progress { border: 1px solid var(--border); border-radius: 7px; padding: 10px; margin: 10px 0; }
+#marble-activity { display: block; margin-top: 5px; color: var(--text2); font-size: 11px; }
+#marble-steps { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--text3); }
+#marble-steps li::before { content: '○ '; }
+#marble-steps .active { color: #23805e; font-weight: 600; }
+#marble-steps .active::before { content: '● '; }
+#marble-steps .done { color: #23805e; }
+#marble-steps .done::before { content: '✓ '; }
+#marble-steps .failed { color: #b3452c; }
+#marble-progress-log { padding-left: 16px; max-height: 160px; overflow-y: auto; line-height: 1.8; color: var(--text2); }
+#marble-status.marble-error { padding: 10px; border: 1px solid #b3452c60; border-radius: 6px; color: #b3452c; background: #e2755014; }

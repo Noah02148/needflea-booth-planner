@@ -1,0 +1,51 @@
+/* Two rows: common actions, then the selected functional group. */
+#topbar {
+  height: auto;
+  min-height: 100px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0 16px;
+  overflow: visible;
+}
+.toolbar-header { min-height: 52px; display: flex; align-items: center; gap: 12px; }
+.toolbar-tabs { display: flex; align-self: stretch; gap: 4px; margin-left: 8px; }
+.toolbar-tab {
+  border: 0; border-bottom: 2px solid transparent; padding: 0 12px;
+  background: transparent; color: #ffffff90; font: inherit; font-size: 12px;
+  cursor: pointer; white-space: nowrap;
+}
+.toolbar-tab:hover { color: #fff; background: #ffffff08; }
+.toolbar-tab[aria-selected="true"] { color: var(--green); border-bottom-color: var(--green); }
+.toolbar-tab:focus-visible, #topbar button:focus-visible, #topbar select:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.toolbar-quick { margin-left: auto; display: flex; gap: 8px; }
+.toolbar-context { display: flex; align-items: stretch; min-height: 48px; border-top: 1px solid #ffffff12; }
+.toolbar-selection { display: flex; align-items: center; gap: 10px; padding-right: 14px; margin-right: 14px; border-right: 1px solid #ffffff18; flex-shrink: 0; }
+#toolbar-current-tool { color: #ffffff90; font-size: 11px; width: 90px; white-space: nowrap; }
+.toolbar-panel { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; overflow-x: auto; padding: 7px 2px; }
+.toolbar-panel > * { flex-shrink: 0; }
+.toolbar-panel[hidden] { display: none; }
+.toolbar-note { font-size: 11px; color: #ffffff70; white-space: nowrap; }
+#topbar .toolbar-panel .tb-spacer { flex: 1; }
+#topbar #site-library-button { max-width: 180px; overflow: hidden; text-overflow: ellipsis; display: block; }
+#topbar #btn-booth { min-width: 155px; }
+@media (max-width: 1150px) {
+  #topbar { padding: 0 10px; }
+  .toolbar-header { flex-wrap: wrap; gap: 8px; padding-top: 10px; }
+  .toolbar-tabs { order: 3; width: 100%; margin: 0; height: 40px; overflow-x: auto; }
+  .toolbar-tab { flex: 1; padding: 0 10px; }
+  #toolbar-current-tool { display: none; }
+  .toolbar-selection { padding-right: 8px; margin-right: 8px; }
+  #environment-panel { top: 150px; }
+}
+@media (max-width: 600px) {
+  #topbar .logo { display: none; }
+  #topbar #site-library-button { max-width: 125px; }
+  .toolbar-header { gap: 6px; }
+  .toolbar-quick { gap: 4px; }
+  #topbar .tb-btn { padding: 0 7px; font-size: 11px; }
+  .toolbar-tab { padding: 0 7px; }
+  .toolbar-panel { gap: 6px; }
+}

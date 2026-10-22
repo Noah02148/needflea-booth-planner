@@ -1,63 +1,73 @@
+import { validateMarbleAsset } from './marble-contract.mjs';
+import { createMarbleUI } from './marble-ui.mjs?v=6';
 // Optional Three.js viewer and portable, photo-assisted environment data.
 (() => {
-  const defaults = () => ({ schema: 'needflea-environment/1', floorColor: '#d4cbbd', wallColor: '#deddd5', floorPattern: 'plain', floorTileMeters: 1, showPlan: true, showStructures: true, floorTexture: null, textureMeters: 2, photos: [], notes: '', generationPrompt: '', objects: [], analysis: null });
+  const defaults = () => ({ schema: 'needflea-environment/1', marble: null, floorColor: '#d4cbbd', wallColor: '#deddd5', floorPattern: 'plain', floorTileMeters: 1, showPlan: true, showStructures: true, floorTexture: null, textureMeters: 2, photos: [], notes: '', generationPrompt: '', objects: [], analysis: null });
   let state = defaults(), scene = null, loading = null, mode = null, firstPoint = null, selected = null;
-  let proposalPreview = null, analysisController = null;
-  let progressTimer = null, progressState = null;
-  let photoPlacement = null;
-  const analysisURL = window.NEEDFLEA_ENVIRONMENT_API_URL || 'http://127.0.0.1:3003';
+  let proposalPreview = null;
+  let inputMethod = 'manual';
+  let photoPlacement = null, marbleUI = null;
   const $ = id => document.getElementById(id);
   const host = document.createElement('div'); host.id = 'scene-three'; host.hidden = true; wrap.appendChild(host);
   const panel = document.createElement('aside'); panel.id = 'environment-panel'; panel.hidden = true;
   panel.innerHTML = `
-    <div class="env-heading"><div><small>PHOTO → SPACE</small><h2>场地环境</h2></div><button id="env-close" aria-label="关闭环境面板">×</button></div>
-    <p class="env-intro">用 CAD 定位，用照片还原外观。墙柱高度与尺寸以实测为准。</p>
-    <div class="env-section"><h3>01 · 实景照片</h3><p>每张照片可在底图上标注拍摄位置和朝向：先点拍摄点，再点镜头朝向。照片编号与图上的 P1、P2 对应。</p>
+    <div class="env-heading"><div><small>VENUE ENVIRONMENT</small><h2>场地环境</h2></div><button id="env-close" aria-label="关闭环境面板">×</button></div>
+    <p class="env-intro">按实测手动搭建，或用 Marble 从照片生成实景。两种环境可叠加，位置与尺寸以 CAD 和实测为准。</p>
+    <div class="env-methods" role="tablist" aria-label="环境添加方式"><button id="env-method-manual" role="tab" aria-selected="true" aria-controls="env-manual-panel">手动增加环境</button><button id="env-method-marble" role="tab" aria-selected="false" aria-controls="env-marble-panel" tabindex="-1">Marble 生成</button></div>
+    <section id="env-marble-panel" role="tabpanel" aria-labelledby="env-method-marble" hidden>
+    <div class="env-section"><h3>01 · 场地照片</h3><p>上传同一区域、视角重叠的清晰照片。可在底图上标注拍摄位置和朝向，P 编号与照片对应。当前支持照片输入。</p>
       <label class="env-file">＋ 添加场地照片<input id="env-photos" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label>
       <div id="env-photo-list"></div>
-      <label>场地说明 / 实测记录<textarea id="env-notes" rows="3" placeholder="如：层高 4.2 米；西侧砖墙；柱距以 CAD 为准。"></textarea></label>
+      <label>场地说明 / 生成要求<textarea id="env-notes" rows="3" placeholder="描述本次区域、需保留的墙柱和材质；填写已知层高、柱距等实测记录。"></textarea></label>
     </div>
-    <div class="env-section"><h3>02 · 地面与底图</h3>
-      <div class="env-row"><label>地面颜色<input id="env-floor" type="color"></label><label>墙柱颜色<input id="env-wall" type="color"></label></div>
+    </section>
+    <section id="env-manual-panel" role="tabpanel" aria-labelledby="env-method-manual">
+    <p class="env-method-note">先设置地面，再按实测尺寸添加墙体、柱子和台面。手动内容会与已应用的 Marble 环境一起显示。</p>
+    <div class="env-section"><h3>01 · 地面与材质</h3>
+      <div class="env-row"><label>地面颜色<input id="env-floor" type="color"></label><label>默认墙柱颜色<input id="env-wall" type="color"></label></div>
       <div class="env-row"><label>地面纹理<select id="env-pattern"><option value="plain">纯色</option><option value="tile">瓷砖</option><option value="wood">木地板</option><option value="concrete">水泥</option></select></label><label>纹理单元（米）<input id="env-pattern-size" type="number" min="0.1" max="20" step="0.1"></label></div>
       <label class="env-check"><input id="env-plan" type="checkbox"> 显示 CAD / 图片地面底图</label>
       <label class="env-file">上传地面材质近照<input id="env-texture" type="file" accept="image/jpeg,image/png,image/webp" hidden></label>
       <p>使用正对地面的材质近照。关闭底图后可看完整材质；普通透视场景照片仅作参考。</p>
       <div class="env-row"><label>每块贴图宽度（米）<input id="env-tile" type="number" min="0.1" max="100" step="0.1"></label><button id="env-texture-remove">移除材质</button></div>
     </div>
-    <div class="env-section"><h3>03 · 墙柱与台面</h3>
-      <p>先填写实测尺寸，再在三维底图上点击定位。墙体需点起点、终点；柱和台面点中心。</p>
+    <div class="env-section"><h3>02 · 添加墙柱与台面</h3>
+      <p>先填写实测尺寸，再点击下方类型进入放置。墙体点起点和终点，厚度取“厚 / 宽”；柱子和台面点中心，使用“厚 / 宽”和“深度”。</p>
       <div class="env-row"><label>高度（米）<input id="env-height" type="number" value="3" min="0.01" max="100" step="0.1"></label><label>厚 / 宽（米）<input id="env-width" type="number" value="0.3" min="0.01" max="1000" step="0.1"></label><label>深度（米）<input id="env-depth" type="number" value="0.5" min="0.01" max="1000" step="0.1"></label></div>
       <div class="env-row"><button data-env-add="wall">＋ 墙体</button><button data-env-add="column">＋ 柱子</button><button data-env-add="platform">＋ 台面</button></div>
       <button id="env-cancel" hidden>取消放置（Esc）</button>
       <label class="env-check"><input id="env-structures" type="checkbox"> 显示墙柱 / 台面</label>
       <div id="env-object-list"></div><div id="env-object-editor" hidden></div>
     </div>
-    <div class="env-section env-ai-section"><h3>照片 → 三维环境</h3>
-      <p>识别照片中的墙柱外观、地面材质，结合 CAD 生成可旋转的场地简模。未知位置会列为待确认项；近似尺寸标注为“估计”。</p>
-      <p id="env-ai-status" role="status">正在检查本机 Codex 登录状态…</p>
-      <div id="env-ai-progress" hidden>
-        <div class="env-progress-meta"><strong id="env-ai-elapsed"></strong><span id="env-ai-activity"></span></div>
-        <ol id="env-ai-steps"><li>准备资料</li><li>启动 Codex</li><li>模型处理</li><li>校验结果</li><li>显示预览</li></ol>
-        <p id="env-ai-wait"></p>
-        <details><summary>查看阶段记录</summary><ol id="env-ai-log"></ol></details>
-      </div>
-      <label>补充要求 / 修改意见<textarea id="env-instruction" rows="3" maxlength="4000" placeholder="例如：柱高按实测 4.2 米；把地面改成照片里的灰色瓷砖，保留其他结构。"></textarea></label>
-      <div class="env-row" id="env-ai-actions"><button id="env-generate">从照片生成环境</button><button id="env-ai-check">检查连接</button><button id="env-ai-cancel" hidden>取消分析</button></div>
-      <p>通过本机 Codex 的 ChatGPT 登录使用现有套餐额度，无需 API Key，不调用另行计费的 API。仍受套餐用量限制；生成、修改和预览均在本网页完成。</p>
-      <div id="env-ai-preview" hidden><strong>生成结果预览 · 尚未应用</strong><div class="env-row env-preview-actions"><button id="env-ai-apply">应用此环境</button><button id="env-ai-discard">放弃预览</button></div><p id="env-ai-summary"></p><div id="env-ai-report"></div></div>
-    </div>
-    <div class="env-section"><h3>手动交换建模资料</h3><p>也可导出资料，将资料文件和原始照片交给 GPT，获得环境 JSON 后手动导入。</p>
-      <div class="env-row"><button id="env-brief">导出建模资料</button><label class="env-file">导入环境 JSON<input id="env-import" type="file" accept=".json" hidden></label></div>
+    <details class="env-section env-data-tools"><summary>环境数据导入 / 导出</summary><p>导入环境 JSON 会替换同名环境字段；完整场地请使用底部“保存完整项目”。</p>
+      <div class="env-row"><button id="env-brief">导出场地资料</button><label class="env-file">导入环境 JSON<input id="env-import" type="file" accept=".json" hidden></label></div>
       <button id="env-export">导出环境 JSON</button>
-    </div>
+    </details>
+    </section>
     <p id="env-message" role="status" aria-live="polite"></p>
     <div class="env-footer"><button id="env-fit">适合视图</button><button id="env-png">导出 3D 图片</button><button id="env-save">保存完整项目</button></div>`;
   document.body.appendChild(panel);
-  // Opening the progress details must not move the cancel button mid-click.
-  $('env-ai-actions').after($('env-ai-progress'));
-  // Keep the photo-generation action next to the uploaded photos.
-  panel.insertBefore(panel.querySelector('.env-ai-section'), panel.querySelectorAll('.env-section')[1]);
+  function setInputMethod(method) {
+    if (proposalPreview || marbleUI?.isLoading()) { message('请先应用、放弃或取消当前预览，再切换添加方式。'); return; }
+    marbleUI?.cancel(); finishPhotoPlacement(); cancel();
+    inputMethod = method;
+    for (const name of ['manual', 'marble']) {
+      const active = method === name, tab = $('env-method-' + name);
+      tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
+      $('env-' + name + '-panel').hidden = !active;
+    }
+    if (method === 'manual' && scene && _3dMode) scene.fit();
+    message(method === 'manual' ? '按 CAD 和实测添加环境；已有照片和 Marble 场景保留。' : '上传场地照片，确认费用后生成，校准后再应用。');
+  }
+  for (const name of ['manual', 'marble']) {
+    const tab = $('env-method-' + name);
+    tab.onclick = () => setInputMethod(name);
+    tab.onkeydown = e => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault(); const next = e.key === 'Home' ? 'manual' : e.key === 'End' ? 'marble' : name === 'manual' ? 'marble' : 'manual';
+      setInputMethod(next); if (inputMethod === next) $('env-method-' + next).focus();
+    };
+  }
   const hud = document.createElement('div'); hud.id = 'environment-hud'; hud.hidden = true;
   hud.innerHTML = '<strong>场地三维预览</strong><span id="env-hud-tip">拖动旋转 · 滚轮缩放 · 右键平移</span><button id="env-hud-fit">适合视图</button><button id="env-photo-cancel" hidden>取消标注（Esc）</button>';
   wrap.appendChild(hud);
@@ -73,6 +83,7 @@
     if (!input || input.schema !== 'needflea-environment/1') throw new Error('环境格式应为 needflea-environment/1');
     if (!Array.isArray(input.objects) || input.objects.length > 1000) throw new Error('objects 必须为数组，最多 1000 项');
     const result = defaults();
+    result.marble = validateMarbleAsset(input.marble);
     result.generationPrompt = String(input.generationPrompt || '').slice(0, 4000);
     if (input.floorPattern !== undefined) {
       if (!['plain', 'tile', 'wood', 'concrete'].includes(input.floorPattern)) throw new Error('地面纹理类型无效');
@@ -150,7 +161,7 @@
   }
   function cancel() {
     mode = null; firstPoint = null; $('env-cancel').hidden = true;
-    host.style.cursor = ''; if (scene) scene.controls.enabled = true;
+    host.style.cursor = ''; if (scene) scene.controls.enabled = scene.marbleView !== 'inside';
     $('env-hud-tip').textContent = '拖动旋转 · 滚轮缩放 · 右键平移';
   }
   function groundClick(point) {
@@ -224,15 +235,16 @@
       const clear = document.createElement('button'); clear.dataset.photoClear = i; clear.textContent = '清除位置'; clear.hidden = !p.camera;
       clear.onclick = () => { if (photoPlacement) finishPhotoPlacement(); delete p.camera; syncPhotos(); render(); };
       remove.onclick = () => { if (photoPlacement) finishPhotoPlacement(); state.photos.splice(i, 1); syncPhotos(); render(); };
-      for (const button of [place, clear, remove]) button.disabled = !!analysisController || !!proposalPreview;
+      for (const button of [place, clear, remove]) button.disabled = !!proposalPreview;
       actions.append(place, clear, remove);
       row.append(title, img, text, pose, actions); list.append(row);
     });
+    marbleUI?.sync();
   }
 
   function cameraAngle(camera) { return (Math.atan2(camera.targetY - camera.y, camera.targetX - camera.x) * 180 / Math.PI + 360) % 360; }
   function startPhotoPlacement(photo) {
-    if (analysisController || proposalPreview) { message('请先取消生成或应用 / 放弃预览，再标注拍摄位置。'); return; }
+    if (proposalPreview) { message('请先取消生成或应用 / 放弃预览，再标注拍摄位置。'); return; }
     if (!renderer.dxfData) { message('请先导入 CAD 或图片底图。'); return; }
     if (photoPlacement) finishPhotoPlacement();
     cancel();
@@ -261,6 +273,10 @@
   }
   function photoPointerDown(x, y) {
     if (!photoPlacement) return false;
+    if (photoPlacement.kind === 'marble') {
+      const callback = photoPlacement.callback;
+      finishPhotoPlacement(); callback({ x, y }); return true;
+    }
     if (!photoPlacement.first) {
       photoPlacement.first = { x, y }; photoPlacement.cursor = { x, y };
       $('env-hud-tip').textContent = '② 移动鼠标预览朝向，再点击确认 · Esc 取消';
@@ -299,8 +315,8 @@
     $('env-plan').checked = state.showPlan; $('env-structures').checked = state.showStructures;
     $('env-tile').value = state.textureMeters; $('env-notes').value = state.notes;
     $('env-pattern').value = state.floorPattern; $('env-pattern-size').value = state.floorTileMeters;
-    $('env-instruction').value = state.generationPrompt;
     syncObjects(); syncPhotos();
+    marbleUI?.sync();
   }
   function download(name, data) {
     const url = URL.createObjectURL(new Blob([typeof data === 'string' ? data : JSON.stringify(data, null, 2)], { type: 'application/json' }));
@@ -310,184 +326,35 @@
     if (!/^image\/(jpeg|png|webp)$/.test(file.type)) throw new Error('请使用 JPG、PNG 或 WebP 图片');
     if (file.size > 25 * 1024 * 1024) throw new Error('单张图片请小于 25MB');
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, 1200 / Math.max(bitmap.width, bitmap.height));
+    const scale = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
     const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(bitmap.width * scale)); c.height = Math.max(1, Math.round(bitmap.height * scale));
     c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height); bitmap.close();
-    return c.toDataURL('image/jpeg', 0.82);
+    let quality = 0.88, dataUrl;
+    do { dataUrl = c.toDataURL('image/jpeg', quality); quality -= 0.1; } while (dataUrl.length >= 4000000 && quality >= 0.35);
+    if (dataUrl.length >= 4000000) throw new Error('压缩后的照片仍过大，请缩小图片后重试');
+    return dataUrl;
   }
 
-  async function checkConnection() {
-    $('env-ai-status').classList.remove('env-ai-error');
-    try {
-      const response = await fetch(`${analysisURL}/health`, { signal: AbortSignal.timeout(12000) });
-      if (!response.ok) throw new Error('服务未响应');
-      const status = await response.json();
-      $('env-ai-status').textContent = status.configured
-        ? `已连接 ${status.provider} · 使用现有套餐额度`
-        : status.message || '请先在本机运行 codex login，通过 ChatGPT 登录后重试。';
-      return status;
-    } catch {
-      $('env-ai-status').textContent = '未连接照片分析服务。请在本地终端运行 node environment-server.mjs，再点击“检查连接”。';
-      return null;
-    }
-  }
-  function generationMessage(text, error = false) {
-    $('env-ai-status').textContent = text;
-    $('env-ai-status').classList.toggle('env-ai-error', error);
-    message(text);
-  }
-  function startProgress() {
-    clearInterval(progressTimer);
-    progressState = { started: Date.now(), activity: Date.now(), heartbeat: 0, step: 0, active: true, lastMessage: '' };
-    $('env-ai-log').replaceChildren(); $('env-ai-progress').hidden = false;
-    progressTimer = setInterval(drawProgress, 1000); drawProgress();
-  }
-  function drawProgress() {
-    if (!progressState) return;
-    const s = progressState, seconds = Math.floor(((s.finished || Date.now()) - s.started) / 1000);
-    $('env-ai-elapsed').textContent = `已用 ${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
-    const quiet = Math.floor((Date.now() - s.activity) / 1000);
-    $('env-ai-activity').textContent = s.active ? `最近状态更新：${quiet} 秒前` : s.outcome;
-    $('env-ai-steps').querySelectorAll('li').forEach((li, i) => {
-      li.className = i < s.step || s.outcome === '已完成' ? 'done' : i === s.step && s.active ? 'active' : '';
-    });
-    const alive = s.heartbeat && Date.now() - s.heartbeat < 20000;
-    $('env-ai-wait').textContent = !s.active ? '用时为实际耗时；阶段信息来自本地服务和 Codex 事件。'
-      : quiet >= 30 ? (alive ? '服务仍连通，正在等待 Codex 的下一次状态更新。模型没有提供可计算的完成百分比。' : '暂未收到新的服务状态，连接可能中断；可继续等待或取消。')
-      : '显示实际阶段与耗时，完成后会自动打开三维预览。';
-  }
-  function progressEvent(event) {
-    if (!progressState || !progressState.active) return;
-    progressState.heartbeat = Date.now();
-    if (event.type === 'heartbeat') { drawProgress(); return; }
-    progressState.activity = Date.now();
-    const steps = { auth: 0, preparing: 0, starting: 1, connected: 1, analyzing: 2, generating: 2, validating: 3, preview: 4 };
-    if (steps[event.stage] !== undefined) progressState.step = Math.max(progressState.step, steps[event.stage]);
-    if (typeof event.message === 'string') {
-      generationMessage(event.message);
-      if (event.message !== progressState.lastMessage) {
-        const li = document.createElement('li');
-        li.textContent = `${Math.floor((Date.now() - progressState.started) / 1000)} 秒 · ${event.message}`;
-        $('env-ai-log').append(li);
-        if ($('env-ai-log').children.length > 15) $('env-ai-log').firstChild.remove();
-        progressState.lastMessage = event.message;
-      }
-    }
-    drawProgress();
-  }
-  function stopProgress(outcome) {
-    clearInterval(progressTimer); progressTimer = null;
-    if (progressState) { progressState.active = false; progressState.finished = Date.now(); progressState.outcome = outcome; drawProgress(); }
-  }
-  function updateGenerateButton() {
-    const button = $('env-generate');
-    button.disabled = !!analysisController;
-    button.textContent = analysisController ? 'Codex 正在生成…' : proposalPreview ? '按修改意见重新生成' : '从照片生成环境';
-    $('env-instruction').disabled = !!analysisController;
-    $('env-ai-apply').disabled = $('env-ai-discard').disabled = !!analysisController;
-    panel.querySelectorAll('.env-photo-actions button').forEach(button => { button.disabled = !!analysisController || !!proposalPreview; });
-  }
   function lockPreview(locked) {
-    panel.querySelectorAll('.env-section:not(.env-ai-section) input, .env-section:not(.env-ai-section) textarea, .env-section:not(.env-ai-section) select, .env-section:not(.env-ai-section) button').forEach(e => { e.disabled = locked; });
+    panel.querySelectorAll('.env-section input, .env-section textarea, .env-section select, .env-section button').forEach(e => { e.disabled = locked; });
     $('env-save').disabled = locked;
     document.querySelector('button[onclick="saveProject()"]').disabled = locked;
-    updateGenerateButton();
+    $('env-method-manual').disabled = $('env-method-marble').disabled = locked;
+    marbleUI?.sync();
   }
   function dropPreview() {
-    proposalPreview = null; $('env-ai-preview').hidden = true; lockPreview(false);
+    proposalPreview = null; lockPreview(false);
     $('env-hud-tip').textContent = '拖动旋转 · 滚轮缩放 · 右键平移';
+    marbleUI?.sync();
   }
-  function previewProposal(proposal, model) {
-    cancel();
-    const environment = validate({ ...state, ...proposal, schema: 'needflea-environment/1', floorTexture: null, showPlan: false, showStructures: true, analysis: { summary: proposal.summary, observations: proposal.observations, assumptions: proposal.assumptions, questions: proposal.questions, model } });
-    proposalPreview = { environment, proposal, model };
-    $('env-ai-summary').textContent = `${proposal.summary}（${proposal.objects.length} 个结构，${proposal.objects.filter(o => o.estimated).length} 个包含估计尺寸）`;
-    const report = $('env-ai-report'); report.replaceChildren();
-    for (const [key, title] of [['observations', '照片识别'], ['assumptions', '估计与假设'], ['questions', '待确认']]) {
-      if (!proposal[key].length) continue;
-      const h = document.createElement('h4'); h.textContent = title;
-      const ul = document.createElement('ul');
-      for (const value of proposal[key]) { const li = document.createElement('li'); li.textContent = value; ul.append(li); }
-      report.append(h, ul);
-    }
-    $('env-ai-preview').hidden = false;
-    $('env-hud-tip').textContent = '照片生成预览 · 尚未应用 · 查看面板确认结果';
-    lockPreview(true); refresh(true).catch(err => { message(err.message); });
-    message('三维视图已显示生成结果。应用后替换原有墙柱与地面材质；摊位保持原位置。');
-    panel.scrollTo({ top: $('env-ai-preview').offsetTop - 20, behavior: 'instant' });
-  }
-  function analysisFrame() {
-    return JSON.stringify({ state, preview: proposalPreview?.proposal || null, mpu: metersPerUnit, bounds: bounds() });
-  }
-  $('env-ai-check').onclick = checkConnection;
-  $('env-ai-cancel').onclick = () => { analysisController?.abort(); };
-  $('env-ai-discard').onclick = () => { dropPreview(); changed(); message('已放弃预览，恢复原环境。'); };
-  $('env-ai-apply').onclick = () => {
-    if (!proposalPreview) return;
-    state = { ...proposalPreview.environment, generationPrompt: state.generationPrompt }; selected = null;
-    dropPreview(); sync(); changed(); message('照片生成的环境已应用。可逐项修正估计尺寸，完成后保存完整项目。');
-  };
-  $('env-generate').onclick = async () => {
-    if (photoPlacement) { message('请先完成拍摄位置与朝向标注，或按 Esc 取消。'); return; }
-    if (analysisController) {
-      generationMessage('Codex 正在分析中，可点击“取消分析”。'); return;
-    }
-    if (!state.photos.length) { generationMessage('请先上传至少一张实景照片。', true); return; }
-    const frame = analysisFrame(), cadFile = _cadFileData;
-    const controller = analysisController = new AbortController();
-    startProgress();
-    updateGenerateButton(); $('env-ai-cancel').hidden = false;
-    generationMessage('正在检查照片分析服务…');
-    try {
-      const connection = await checkConnection();
-      if (analysisController !== controller) return;
-      if (controller.signal.aborted) throw new DOMException('分析已取消', 'AbortError');
-      if (!connection) throw new Error('照片分析服务未启动。请在项目终端运行 node environment-server.mjs，再点击生成。');
-      if (!connection.configured) throw new Error(connection.message || '请先通过 ChatGPT 登录本机 Codex，再重试。');
-      generationMessage(`正在通过 ${connection.provider} 分析照片并生成环境，请稍候…`);
-      const b = bounds(), image = floorImage(b);
-      if (!image) throw new Error('请先导入场地底图，再从照片生成环境。');
-      const c = document.createElement('canvas');
-      const scale = Math.min(1, 1400 / Math.max(image.width, image.height));
-      c.width = Math.max(1, Math.round(image.width * scale)); c.height = Math.max(1, Math.round(image.height * scale));
-      const ctx = c.getContext('2d'); ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height); ctx.drawImage(image, 0, 0, c.width, c.height);
-      const allEntities = _venueEntities();
-      // The plan image keeps whole-site context when geometry needs capping.
-      const cadEntities = allEntities.filter(e => !e.points || e.points.length <= 100).slice(0, 1500).map(e => e.text ? { ...e, text: e.text.slice(0, 500) } : e);
-      const current = proposalPreview?.environment || state;
-      const body = { bounds: b, metersPerUnit, notes: state.notes, instruction: state.generationPrompt, currentEnvironment: { floorColor: current.floorColor, wallColor: current.wallColor, floorPattern: current.floorPattern, floorTileMeters: current.floorTileMeters, objects: current.objects.map(o => ({ ...o, name: o.name || '', color: o.color || current.wallColor, estimated: o.estimated ?? true, source: o.source || '用户手动添加的环境对象' })) }, photos: state.photos, planImage: c.toDataURL('image/jpeg', 0.85), cadEntities };
-      const timeout = setTimeout(() => controller.abort(), 250000);
-      let response, result;
-      try {
-        const { readAnalysisResponse } = await import('./environment-progress.mjs');
-        response = await fetch(`${analysisURL}/analyze`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(body), signal: controller.signal });
-        result = await readAnalysisResponse(response, event => { if (analysisController === controller) progressEvent(event); });
-      }
-      finally { clearTimeout(timeout); }
-      if (!response.ok || result.error) throw new Error(result.error || '照片分析失败，请重试。');
-      if (controller.signal.aborted || analysisController !== controller) return;
-      if (cadFile !== _cadFileData || frame !== analysisFrame()) throw new Error('分析期间项目或照片发生变化，本次结果未应用。请以当前资料重新生成。');
-      const { validateProposal } = await import('./environment-ai-contract.mjs');
-      if (controller.signal.aborted || analysisController !== controller || cadFile !== _cadFileData || frame !== analysisFrame()) return;
-      previewProposal(validateProposal(result.proposal, b), result.model);
-      progressEvent({ type: 'progress', stage: 'preview', message: '环境数据校验通过，已显示三维预览' }); stopProgress('已完成');
-      generationMessage(`分析完成 · ${result.provider} · ${result.model}。请检查下方预览，再应用或放弃。`);
-    } catch (err) {
-      if (analysisController !== controller) return;
-      stopProgress(controller.signal.aborted ? '已取消 / 超时' : '未完成');
-      generationMessage(controller.signal.aborted ? '照片分析已取消或超时，原环境未修改。' : err instanceof TypeError ? '无法连接本地照片分析服务，请运行 node environment-server.mjs 并检查模型配置。' : err.message, true);
-    } finally {
-      if (analysisController === controller) { if (progressState?.active) stopProgress('已结束'); analysisController = null; $('env-ai-cancel').hidden = true; updateGenerateButton(); }
-    }
-  };
 
-  $('env-close').onclick = () => { finishPhotoPlacement(); panel.hidden = true; cancel(); analysisController?.abort(); dropPreview(); changed(); };
+  $('env-close').onclick = () => { marbleUI?.cancel(); finishPhotoPlacement(); panel.hidden = true; cancel(); dropPreview(); changed(); };
   $('env-cancel').onclick = cancel;
   $('env-fit').onclick = $('env-hud-fit').onclick = () => { if (photoPlacement) { renderer.fitToView(); render(); } else scene?.fit(); };
-  $('env-photo-cancel').onclick = () => { finishPhotoPlacement(); message('已取消标注，保留原拍摄位置和朝向。'); };
+  $('env-photo-cancel').onclick = () => { if (photoPlacement?.kind === 'marble') marbleUI?.cancel(); else finishPhotoPlacement(); message('已取消选点，保留原数据。'); };
   $('env-png').onclick = () => scene?.exportPNG();
   $('env-save').onclick = () => saveProject();
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { finishPhotoPlacement(); cancel(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { marbleUI?.cancel(); finishPhotoPlacement(); cancel(); } });
   for (const [id, key] of [['env-floor', 'floorColor'], ['env-wall', 'wallColor'], ['env-plan', 'showPlan'], ['env-structures', 'showStructures'], ['env-tile', 'textureMeters'], ['env-pattern', 'floorPattern'], ['env-pattern-size', 'floorTileMeters']]) {
     $(id).onchange = () => {
       try {
@@ -498,7 +365,6 @@
     };
   }
   $('env-notes').oninput = () => { state.notes = $('env-notes').value.slice(0, 10000); };
-  $('env-instruction').oninput = () => { state.generationPrompt = $('env-instruction').value.slice(0, 4000); };
   panel.querySelectorAll('[data-env-add]').forEach(button => { button.onclick = () => {
     cancel(); mode = button.dataset.envAdd; if (scene) scene.controls.enabled = false;
     host.style.cursor = 'crosshair'; $('env-cancel').hidden = false;
@@ -528,7 +394,7 @@
       cadLayers: _venueLayers(), cadEntities: _venueEntities(),
       environment: { ...state, photos: undefined, floorTexture: undefined },
       objectExample: { id: 1, type: 'column', name: '确认过位置的柱子', x: 0, y: 0, width: 0.5, depth: 0.5, height: 3, angle: 0 },
-    }); message('建模资料已导出。此文件不含照片，请另附原始照片；也可用“从照片生成环境”直接分析。');
+    }); message('建模资料已导出。此文件不含照片，请另附原始照片；照片生成请切换到“Marble 生成”。');
   };
   $('env-import').onchange = async e => {
     try {
@@ -543,6 +409,7 @@
   };
 
   window.environmentUI = {
+    hasPendingPreview: () => !!proposalPreview || !!marbleUI?.isLoading(),
     drawPhotoMarkers,
     photoPointerDown,
     photoPointerMove(x, y) {
@@ -550,15 +417,14 @@
       photoPlacement.cursor = { x, y }; render(); return true;
     },
     isPhotoPositioning: () => !!photoPlacement,
-    cancelPhotoPlacement: finishPhotoPlacement,
+    cancelPhotoPlacement(returnToView = true) { if (photoPlacement?.kind === 'marble') marbleUI?.cancel(); else finishPhotoPlacement(returnToView); },
     validate: data => data == null ? defaults() : validate(data),
     snapshot: () => structuredClone(state),
     restore(data) {
       const next = data == null ? defaults() : validate(data);
-      finishPhotoPlacement(false);
-      stopProgress('已切换项目');
-      analysisController?.abort(); analysisController = null; $('env-ai-cancel').hidden = true; dropPreview();
-      state = next; selected = null; cancel(); sync();
+      marbleUI?.cancel(); finishPhotoPlacement(false);
+      dropPreview();
+      state = next; selected = null; cancel(); sync(); setInputMethod(state.marble ? 'marble' : 'manual');
     },
     async toggle(openPanel = false) {
       finishPhotoPlacement(false);
@@ -569,9 +435,9 @@
       const button = $('btn-3d'); button.disabled = true; $('btn-environment').disabled = true;
       try {
         if (!scene) {
-          loading ||= import('./scene-three.js').then(module => module.VenueScene).catch(err => { loading = null; throw err; });
+          loading ||= import('./scene-three.js?v=5').then(module => module.VenueScene).catch(err => { loading = null; throw err; });
           const Viewer = await loading;
-          scene = new Viewer(host, groundClick);
+          scene = new Viewer(host, groundClick, text => marbleUI?.renderStatus(text));
         }
         _3dMode = true; if (_isoRenderer) _isoRenderer.active = false;
         canvas.style.visibility = 'hidden'; host.hidden = false; hud.hidden = false;
@@ -579,25 +445,56 @@
         panel.hidden = !openPanel;
         button.style.background = 'var(--green)'; button.style.color = '#fff';
         await refresh(true);
-        message('上传照片后点击“从照片生成环境”，或按 CAD 手工添加墙柱。');
-        if (openPanel) checkConnection();
+        message('选择“手动增加环境”搭建结构，或切换到“Marble 生成”上传场地照片。');
       } catch (err) {
         this.close(); alert(`三维预览无法启动：${err.message}。请检查浏览器 WebGL 支持和本地资源。二维规划仍可使用。`);
       } finally { button.disabled = false; $('btn-environment').disabled = false; }
     },
     close() {
-      finishPhotoPlacement(false);
-      cancel(); analysisController?.abort(); dropPreview(); _3dMode = false; canvas.style.visibility = ''; host.hidden = panel.hidden = hud.hidden = true;
+      marbleUI?.cancel(); finishPhotoPlacement(false);
+      cancel(); dropPreview(); _3dMode = false; canvas.style.visibility = ''; host.hidden = panel.hidden = hud.hidden = true;
       $('btn-3d').style.background = ''; $('btn-3d').style.color = ''; render();
     },
     render() {
       if (!_3dMode || !scene) return;
-      refresh().catch(err => { message(err.message); console.error(err); });
+      refresh().catch(err => { if (err.name === 'AbortError') return; message(err.message); console.error(err); });
     },
     exportPNG() { scene?.exportPNG(); },
   };
   window.toggle3DView = () => window.environmentUI.toggle();
   window.openEnvironment = () => window.environmentUI.toggle(true);
   window.export3DPNG = () => window.environmentUI.exportPNG();
+  marbleUI = createMarbleUI({
+    panel, getState: () => state, getAsset: () => (proposalPreview?.environment || state).marble,
+    isPreview: () => proposalPreview?.kind === 'marble', isBusy: () => false,
+    getBounds: bounds, getMpu: () => metersPerUnit, message,
+    async preview(asset) {
+      finishPhotoPlacement(); cancel();
+      const currentPreview = proposalPreview = { kind: 'marble', environment: validate({ ...state, marble: asset, showPlan: false }) };
+      lockPreview(true);
+      try { await refresh(); if (proposalPreview === currentPreview) { scene?.enterMarble(); message('已进入 Marble 场景，拖动环顾；需要对齐时切换「俯视校准」。'); } }
+      catch (err) { if (proposalPreview === currentPreview) { dropPreview(); changed(); } throw err; }
+    },
+    cancelLoad() { scene?.releaseMarble(); if (proposalPreview?.kind === 'marble') { dropPreview(); changed(); } },
+    fitScene() { scene?.fitMarble(); },
+    enterScene() { scene?.enterMarble(); },
+    async edit(asset) { (proposalPreview?.kind === 'marble' ? proposalPreview.environment : state).marble = asset; await refresh(); },
+    apply() { if (proposalPreview?.kind !== 'marble') return; state = proposalPreview.environment; dropPreview(); sync(); changed(); message('Marble 环境已应用，请保存完整项目。'); },
+    discard() { if (proposalPreview?.kind === 'marble') { dropPreview(); changed(); message('已放弃 Marble 预览，恢复原环境。'); } },
+    pickScene(callback) {
+      if (!scene || !_3dMode) { message('请先打开三维视图。'); return; }
+      scene.marblePick = callback;
+    },
+    pickCAD(callback) {
+      finishPhotoPlacement(); cancel();
+      photoPlacement = { kind: 'marble', callback, return3D: _3dMode };
+      _3dMode = false; canvas.style.visibility = ''; host.hidden = true;
+      setTool('photo-camera'); canvas.style.cursor = 'crosshair';
+      hud.hidden = false; $('env-photo-cancel').hidden = false;
+      hud.querySelector('strong').textContent = 'Marble 校准 · 选择 CAD 对应点';
+      $('env-hud-tip').textContent = '点击同一墙角 / 柱脚 · Alt 拖动平移 · 滚轮缩放 · Esc 取消'; render();
+    },
+    cancelPick() { if (scene) scene.marblePick = null; if (photoPlacement?.kind === 'marble') finishPhotoPlacement(); },
+  });
   sync();
 })();

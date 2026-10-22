@@ -3,9 +3,10 @@ import { OrbitControls } from './vendor/three/OrbitControls.js';
 
 // CAD (X,Y-up) -> Three (X,Y-height,Z), rebased near the venue centre.
 export class VenueScene {
-  constructor(host, onGroundClick) {
+  constructor(host, onGroundClick, onMarbleStatus = () => {}) {
     this.host = host;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    this.onMarbleStatus = onMarbleStatus;
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -16,12 +17,44 @@ export class VenueScene {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.maxPolarAngle = Math.PI / 2 - 0.02;
     this.controls.addEventListener('change', () => this.draw());
+    this.marbleView = 'overview';
+    const canvas = this.renderer.domElement;
+    canvas.tabIndex = 0;
+    canvas.setAttribute('aria-label', '三维场景：拖动环顾，滚轮前后移动，WASD 移动，R/F 升降');
+    this.walkKeys = new Set();
+    canvas.addEventListener('keydown', e => {
+      if (this.marbleView !== 'inside' || !['KeyW','KeyA','KeyS','KeyD','KeyR','KeyF'].includes(e.code)) return;
+      e.preventDefault(); this.walkKeys.add(e.code);
+    });
+    canvas.addEventListener('keyup', e => this.walkKeys.delete(e.code));
+    canvas.addEventListener('blur', () => this.walkKeys.clear());
+    canvas.addEventListener('pointermove', e => {
+      if (this.marbleView !== 'inside' || !this.down || !e.buttons) return;
+      const rotation = new THREE.Euler().setFromQuaternion(this.camera.quaternion, 'YXZ');
+      rotation.y -= (e.clientX - this.lookX) * .003;
+      rotation.x = THREE.MathUtils.clamp(rotation.x - (e.clientY - this.lookY) * .003, -1.5, 1.5);
+      this.camera.quaternion.setFromEuler(rotation);
+      this.lookX = e.clientX; this.lookY = e.clientY; this.draw();
+    });
+    canvas.addEventListener('wheel', e => {
+      if (this.marbleView !== 'inside') return;
+      e.preventDefault(); this.camera.translateZ(THREE.MathUtils.clamp(e.deltaY * .005, -1, 1)); this.draw();
+    }, { passive: false });
     this.ray = new THREE.Raycaster();
-    this.renderer.domElement.addEventListener('pointerdown', e => { this.down = [e.clientX, e.clientY]; });
+    this.renderer.domElement.addEventListener('pointerdown', e => { this.down = [e.clientX, e.clientY]; this.lookX = e.clientX; this.lookY = e.clientY; canvas.focus({ preventScroll: true }); });
     this.renderer.domElement.addEventListener('pointerup', e => {
       if (e.button !== 0 || !this.down || Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) > 4) return;
       const rect = this.renderer.domElement.getBoundingClientRect();
       this.ray.setFromCamera(new THREE.Vector2((e.clientX - rect.left) / rect.width * 2 - 1, -(e.clientY - rect.top) / rect.height * 2 + 1), this.camera);
+      if (this.marblePick) {
+        if (!this.marbleMesh || !this.marbleRoot?.visible) return;
+        this.scene.updateMatrixWorld(true);
+        const hit = this.ray.intersectObject(this.marbleMesh, false)[0];
+        if (!hit) { this.onMarbleStatus('此处没有可选中的场景，请选择清晰可见的墙角或柱脚。'); return; }
+        const point = this.marbleRoot.worldToLocal(hit.point.clone()), callback = this.marblePick;
+        this.marblePick = null; callback(point); return;
+      }
+      if (this.marbleView === 'inside') return;
       const p = this.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
       if (p && this.frame) onGroundClick({ x: p.x / this.frame.mpu + this.frame.cx, y: -p.z / this.frame.mpu + this.frame.cy });
     });
@@ -41,6 +74,8 @@ export class VenueScene {
   draw() { this.renderer.render(this.scene, this.camera); }
 
   clear() {
+    // Environment splats and their worker are cached separately from editable CAD objects.
+    this.marbleRoot?.removeFromParent(); this.spark?.removeFromParent();
     this.scene.traverse(o => {
       o.geometry?.dispose();
       for (const m of (Array.isArray(o.material) ? o.material : [o.material])) {
@@ -51,6 +86,120 @@ export class VenueScene {
       if (o.isLight) o.shadow?.dispose();
     });
     this.scene.clear();
+  }
+
+  releaseMarble() {
+    this.setMarbleView('overview');
+    this.marbleController?.abort(); this.marbleController = null;
+    this.marbleLoadToken = (this.marbleLoadToken || 0) + 1;
+    this.marbleMesh?.dispose(); this.marbleRoot?.removeFromParent();
+    this.marbleMesh = this.marbleRoot = null; this.marbleKey = null; this.marbleLoading = null;
+    this.spark?.removeFromParent(); this.spark?.dispose(); this.spark = null;
+    this.renderer.setAnimationLoop(null); this.marblePick = null;
+  }
+
+  async updateMarble(asset) {
+    if (!asset) { this.releaseMarble(); this.onMarbleStatus(''); return; }
+    const key = asset.spzUrls[asset.resolution];
+    if (this.marbleKey !== key) {
+      const previousView = this.marbleView;
+      this.releaseMarble(); this.marbleKey = key; this.setMarbleView(previousView);
+      const token = this.marbleLoadToken;
+      const controller = this.marbleController = new AbortController();
+      this.marbleLoading = (async () => {
+        let mesh, monitor, timeout;
+        const start = Date.now();
+        const report = text => { if (token === this.marbleLoadToken && !controller.signal.aborted) this.onMarbleStatus(text); };
+        const bounded = (promise, ms, label) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(label)), ms);
+          const aborted = () => { clearTimeout(timer); reject(new DOMException('已取消加载', 'AbortError')); };
+          controller.signal.addEventListener('abort', aborted, { once: true });
+          if (controller.signal.aborted) aborted();
+          promise.then(value => { clearTimeout(timer); controller.signal.removeEventListener('abort', aborted); resolve(value); }, err => { clearTimeout(timer); controller.signal.removeEventListener('abort', aborted); reject(err); });
+        });
+        try {
+          report('① 正在加载场景渲染器…');
+          const { SplatMesh, SparkRenderer } = await bounded(import('@sparkjsdev/spark'), 30000, '渲染器加载超过 30 秒，请检查本地服务后重试');
+          if (controller.signal.aborted) throw new DOMException('已取消加载', 'AbortError');
+          report('② 正在连接场景下载服务…可取消加载，生成结果会保留');
+          timeout = setTimeout(() => controller.abort(), asset.resolution === 'full_res' ? 660000 : 150000);
+          const url = new URL(key, location.href);
+          if (/\/assets\/[a-f\d-]{36}\/(100k|500k|full_res)\.spz$/i.test(url.pathname)) {
+            url.pathname = url.pathname.replace('/assets/', '/asset-status/');
+            let checking = false;
+            monitor = setInterval(async () => {
+              if (checking || controller.signal.aborted) return;
+              checking = true;
+              try {
+                const result = await fetch(url.href, { signal: AbortSignal.timeout(4000) });
+                if (result.ok) {
+                  const info = await result.json();
+                  report(info.status === 'downloading' ? `② 服务正在下载场景：${(info.received / 1048576).toFixed(1)} MB${info.total ? ` / ${(info.total / 1048576).toFixed(1)} MB` : ''}` : info.status === 'failed' ? '② 场景下载失败，正在结束加载；稍后可重试原结果' : `② 正在等待场景 CDN 响应 · 已用 ${Math.floor((Date.now() - start) / 1000)} 秒`);
+                }
+              } catch { /* The primary asset request reports errors; status polling is advisory. */ }
+              finally { checking = false; }
+            }, 1500);
+          }
+          const response = await fetch(key, { signal: controller.signal });
+          if (!response.ok) { let detail; try { detail = (await response.json()).error; } catch { /* Not a JSON response. */ } throw new Error(detail || `场景下载失败（HTTP ${response.status}）`); }
+          clearInterval(monitor); monitor = null;
+          const reader = response.body.getReader(), chunks = []; let received = 0;
+          const total = Number(response.headers.get('content-length'));
+          try {
+            while (true) {
+              const { value, done } = await reader.read(); if (done) break;
+              received += value.length;
+              if (received > 250 * 1048576) { await reader.cancel(); throw new Error('场景超过 250MB，请选择轻量精度'); }
+              chunks.push(value);
+              report(`② 场景下载 ${total ? Math.round(received / total * 100) + '%' : (received / 1048576).toFixed(1) + ' MB'}`);
+            }
+          } finally { reader.releaseLock(); }
+          clearTimeout(timeout); timeout = null;
+          const bytes = new Uint8Array(received); let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+          report(`③ 正在解码 ${(received / 1048576).toFixed(1)} MB 场景…`);
+          mesh = new SplatMesh({ fileBytes: bytes, fileName: 'marble.spz', raycastable: true, lod: false });
+          // A decoder may settle after cancellation. Dispose its late result too.
+          mesh.initialized.then(() => { if (token !== this.marbleLoadToken || controller.signal.aborted) mesh.dispose(); }, () => {});
+          await bounded(mesh.initialized, asset.resolution === 'full_res' ? 120000 : 45000, '场景解码超时，请切回标准精度或重试');
+          if (controller.signal.aborted || token !== this.marbleLoadToken) { mesh.dispose(); return; }
+          this.marbleMesh = mesh;
+          this.marbleRoot = new THREE.Group();
+          this.marbleRoot.name = 'MarbleEnvironment';
+          const axes = new THREE.Group(); axes.rotation.x = Math.PI;
+          const ground = new THREE.Group(); ground.position.y = -asset.groundOffset;
+          mesh.scale.setScalar(asset.metricScale);
+          ground.add(mesh); axes.add(ground); this.marbleRoot.add(axes);
+          this.spark = new SparkRenderer({ renderer: this.renderer });
+          this.renderer.setAnimationLoop(time => {
+            const dt = Math.min(.05, Math.max(0, (time - (this.walkTime ?? time)) / 1000)); this.walkTime = time;
+            if (this.host.hidden) return;
+            if (this.marbleView === 'inside' && document.activeElement === this.renderer.domElement) {
+              const speed = 2 * dt;
+              this.camera.translateX(((this.walkKeys.has('KeyD') ? 1 : 0) - (this.walkKeys.has('KeyA') ? 1 : 0)) * speed);
+              this.camera.translateZ(((this.walkKeys.has('KeyS') ? 1 : 0) - (this.walkKeys.has('KeyW') ? 1 : 0)) * speed);
+              this.camera.position.y += ((this.walkKeys.has('KeyR') ? 1 : 0) - (this.walkKeys.has('KeyF') ? 1 : 0)) * speed;
+            }
+            this.draw();
+          });
+          report('④ Marble 场景已加载。请对照 CAD 检查比例、地面和对应柱位。');
+        } catch (err) {
+          mesh?.dispose();
+          if (token === this.marbleLoadToken) { this.marbleKey = null; this.onMarbleStatus(controller.signal.aborted ? '场景加载已取消或超时，生成结果仍可从历史任务加载。' : `场景加载失败：${err.message}。可重试原任务，无需重新生成。`); }
+          throw err;
+        } finally { clearTimeout(timeout); clearInterval(monitor); }
+      })();
+    }
+    await this.marbleLoading;
+    if (this.marbleKey !== key || !this.marbleRoot) return;
+    const t = asset.transform;
+    this.marbleRoot.position.copy(this.position(t.x, t.y, t.height));
+    this.marbleRoot.rotation.y = t.angle * Math.PI / 180;
+    this.marbleRoot.scale.setScalar(t.scale); this.marbleRoot.visible = asset.visible;
+    // Metadata can change even when the same resource URL is reused.
+    this.marbleRoot.children[0].children[0].position.y = -asset.groundOffset;
+    this.marbleMesh.scale.setScalar(asset.metricScale);
+    this.scene.add(this.marbleRoot, this.spark); this.setMarbleView(this.marbleView); this.draw();
   }
 
   position(x, y, height = 0) {
@@ -126,6 +275,7 @@ export class VenueScene {
     sun.shadow.normalBias = 0.03;
     this.scene.add(sun);
     const ground = this.box(this.scene, w + 2, 0.15, d + 2, env.floorColor, 0, -0.09, 0);
+    ground.visible = !env.marble?.visible || env.showPlan;
     const pattern = this.floorPattern(env, w + 2, d + 2);
     if (pattern) { ground.material.map = pattern; ground.material.color.set('#ffffff'); }
     if (data.floorImage && env.showPlan) {
@@ -201,6 +351,8 @@ export class VenueScene {
     }
     if (fit || !this.fitted) this.fit();
     this.resize();
+    await this.updateMarble(env.marble);
+    if (generation !== this.generation) return;
     // Optional floor close-up, repeated at a known physical tile size.
     if (env.floorTexture) {
       try {
@@ -215,12 +367,50 @@ export class VenueScene {
   }
 
   fit() {
+    this.setMarbleView('overview'); this.camera.fov = 40;
     this.camera.near = Math.max(0.01, this.span / 10000);
     this.camera.far = this.span * 100;
     const distance = this.span / Math.min(1, this.host.clientWidth / Math.max(1, this.host.clientHeight));
     this.camera.position.set(distance * 0.9, distance * 1.1, distance * 1.1);
     this.controls.target.set(0, 0, 0);
     this.camera.updateProjectionMatrix(); this.controls.update(); this.fitted = true;
+  }
+
+  fitMarble() {
+    if (!this.marbleMesh || !this.marbleRoot?.visible) return;
+    this.setMarbleView('overview'); this.camera.fov = 40;
+    this.scene.updateMatrixWorld(true);
+    const box = this.marbleMesh.getBoundingBox().clone().applyMatrix4(this.marbleMesh.matrixWorld);
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+    const distance = Math.max(size.x, size.y, size.z, 2) / Math.min(1, this.camera.aspect);
+    this.camera.position.copy(center).add(new THREE.Vector3(distance * 0.9, distance * 0.8, distance * 1.1));
+    this.controls.target.copy(center); this.camera.updateProjectionMatrix(); this.controls.update(); this.draw();
+  }
+
+  setMarbleView(mode) {
+    this.marbleView = mode; this.controls.enabled = mode !== 'inside'; this.walkKeys?.clear();
+    // Keep saved visibility intact. This is a temporary viewing mode, never project data.
+    for (const child of this.scene.children) {
+      if (child === this.marbleRoot || child === this.spark || child.isLight) continue;
+      if (mode === 'inside') {
+        if (child.userData.marbleViewVisible === undefined) child.userData.marbleViewVisible = child.visible;
+        child.visible = false;
+      } else if (child.userData.marbleViewVisible !== undefined) {
+        child.visible = child.userData.marbleViewVisible; delete child.userData.marbleViewVisible;
+      }
+    }
+  }
+
+  enterMarble() {
+    if (!this.marbleMesh || !this.marbleRoot?.visible) return;
+    this.scene.updateMatrixWorld(true); this.setMarbleView('inside');
+    // World Labs' viewing origin is raw (0,0,0), not the splat bounding-box centre.
+    this.camera.position.copy(this.marbleMesh.localToWorld(new THREE.Vector3()));
+    const direction = new THREE.Vector3(0, 0, -1).applyQuaternion(this.marbleRoot.quaternion);
+    this.camera.up.set(0, 1, 0); this.camera.lookAt(this.camera.position.clone().add(direction));
+    this.camera.fov = 65; this.camera.near = .03; this.camera.far = Math.max(1000, this.span * 10);
+    this.camera.updateProjectionMatrix(); this.draw();
   }
 
   exportPNG() {

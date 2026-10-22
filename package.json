@@ -3,6 +3,7 @@
     "@mlightcad/libredwg-converter": "^3.5.5",
     "@mlightcad/libredwg-web": "^0.6.6",
     "@resvg/resvg-js": "^2.6.2",
+    "@sparkjsdev/spark": "2.4.0",
     "canvas": "^2.11.2",
     "puppeteer": "^24.39.1",
     "sharp": "^0.34.5",

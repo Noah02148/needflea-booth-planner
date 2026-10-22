@@ -1,4 +1,7 @@
 node_modules/
+.env
+.env.*
+marble-data/
 .DS_Store
 test-*.png
 test-*.svg

@@ -101,6 +101,7 @@ let _isoRenderer = null;
 let _3dMode = false;
 
 // Raw CAD file data for saving
+let _siteInfo = null; // Optional portable venue name and activity note.
 let _cadFileData = null; // { name, base64 }
 
 // Scale (meters per DXF unit) — set by calibration
@@ -1552,6 +1553,7 @@ function setTool(t) {
     if (btn) btn.classList.toggle('active', id === t);
   });
   canvas.style.cursor = t === 'select' ? 'default' : 'crosshair';
+  window.dispatchEvent(new CustomEvent('needflea-tool-changed', { detail: { tool: t } }));
 }
 
 function setBoothStyle(style) {
@@ -2767,12 +2769,13 @@ function _buildVenueExport() {
   };
 }
 
-function saveProject() {
+function captureProject(includeVenue = true) {
   let venue = null;
-  try { venue = _buildVenueExport(); }
+  try { if (includeVenue) venue = _buildVenueExport(); }
   catch (e) { console.warn('venue export failed (saving without it):', e); }
   const data = {
     version: 3,
+    site: _siteInfo ? { ..._siteInfo } : undefined,
     environment: window.environmentUI ? window.environmentUI.snapshot() : undefined,
     cadFile: _cadFileData,
     categories: booths.CAT_COLORS,
@@ -2785,7 +2788,11 @@ function saveProject() {
     viewport: { offsetX: renderer.offsetX, offsetY: renderer.offsetY, scale: renderer.scale },
     venue,
   };
-  const json = JSON.stringify(data);
+  return structuredClone(data);
+}
+
+function saveProject() {
+  const json = JSON.stringify(captureProject());
   const blob = new Blob([json], { type: 'application/json' });
   const link = document.createElement('a');
   link.download = `NEEDFLEA_project_${new Date().toISOString().slice(0,10)}.json`;
@@ -2795,142 +2802,158 @@ function saveProject() {
   document.getElementById('tool-hint').textContent = '项目已保存';
 }
 
-function loadProject(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = async e => {
-    try {
-      const data = JSON.parse(e.target.result);
-      if (!data.version || !data.items) { alert('无效的项目文件'); return; }
-      // Validate the optional environment before changing the current project.
-      const loadedEnvironment = window.environmentUI?.validate(data.environment);
-      if (_3dMode && window.environmentUI) window.environmentUI.close();
+async function applyProjectData(data) {
+  if (!data || !data.version || !Array.isArray(data.items)) throw new Error('无效的项目文件');
+  let inferredMetersPerUnit = null;
+  // Validate the optional environment before changing the current project.
+  const loadedEnvironment = window.environmentUI?.validate(data.environment);
+  if (_3dMode && window.environmentUI) window.environmentUI.close();
 
-      document.getElementById('tool-hint').textContent = '正在载入项目…';
+  document.getElementById('tool-hint').textContent = '正在载入项目…';
 
-      // Restore CAD file first (if included)
-      if (data.cadFile && data.cadFile.base64) {
-        _cadFileData = data.cadFile;
+  // Restore CAD file first (if included)
+  if (data.cadFile && data.cadFile.base64) {
+    _cadFileData = data.cadFile;
 
-        // Image background mode
-        if (data.cadFile.isImage) {
-          const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', bmp: 'image/bmp' };
-          const imgExt = (data.cadFile.name || '').split('.').pop().toLowerCase();
-          const mime = mimeMap[imgExt] || 'image/png';
-          const dataUrl = `data:${mime};base64,${data.cadFile.base64}`;
-          await new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => { renderer.loadImageBackground(img); resolve(); };
-            img.onerror = () => { reject(new Error('Image load fail')); };
-            img.src = dataUrl;
-          });
-          dxfLoaded = true;
-          document.getElementById('welcome').classList.add('hidden');
-          document.getElementById('btn-calib').disabled = false;
-        } else {
+    // Image background mode
+    if (data.cadFile.isImage) {
+      const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', bmp: 'image/bmp' };
+      const imgExt = (data.cadFile.name || '').split('.').pop().toLowerCase();
+      const mime = mimeMap[imgExt] || 'image/png';
+      const dataUrl = `data:${mime};base64,${data.cadFile.base64}`;
+      await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => { renderer.loadImageBackground(img); resolve(); };
+        img.onerror = () => { reject(new Error('Image load fail')); };
+        img.src = dataUrl;
+      });
+      dxfLoaded = true;
+      document.getElementById('welcome').classList.add('hidden');
+      document.getElementById('btn-calib').disabled = false;
+      _dwgLayerVisibility = {}; _dwgEntitiesByLayer = {}; _dwgLayerColors = {}; _dwgBounds = null; _dwgBlockDefs = {}; _dxfFullData = null;
+      populateLayerPanel();
+    } else {
 
-        const binary = atob(data.cadFile.base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const ext = (data.cadFile.name || '').split('.').pop().toLowerCase();
+    const binary = atob(data.cadFile.base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const ext = (data.cadFile.name || '').split('.').pop().toLowerCase();
 
-        if (ext === 'dwg') {
-          // Parse DWG: try libdxfrw first, then ODA fallback
-          const ab = bytes.buffer;
-          let dwgLoaded = false;
-          try {
-            const result = await parseDWGtoSVG(ab);
-            if (result.metersPerUnit) metersPerUnit = result.metersPerUnit;
-            const blob = new Blob([result.svgString], { type: 'image/svg+xml;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            await new Promise((resolve, reject) => {
-              const img = new Image();
-              img.onload = () => { URL.revokeObjectURL(url); renderer.loadSvgBackground(img, result.bounds); resolve(); };
-              img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG fail')); };
-              img.src = url;
-            });
-            dwgLoaded = true;
-          } catch (e) {
-            console.warn('Project DWG libdxfrw failed:', e);
-          }
-          if (!dwgLoaded) {
-            try {
-              const dxfText = await convertDWGtoDXF(ab, data.cadFile.name);
-              const dxfData = parser.parse(dxfText);
-              renderer.load(dxfData);
-              _setupDxfLayerState(dxfData);
-              dwgLoaded = true;
-            } catch (e2) {
-              console.warn('Project DWG ODA failed:', e2);
-              alert('底图 DWG 加载失败，标注数据已恢复。\n请手动重新导入 CAD 文件。');
-            }
-          }
-          if (dwgLoaded) {
-            dxfLoaded = true;
-            document.getElementById('welcome').classList.add('hidden');
-            document.getElementById('btn-calib').disabled = false;
-          }
-        } else {
-          // Parse DXF
-          const content = new TextDecoder().decode(bytes);
-          const dxfData = parser.parse(content);
+    if (ext === 'dwg') {
+      // Parse DWG: try libdxfrw first, then ODA fallback
+      const ab = bytes.buffer;
+      let dwgLoaded = false;
+      try {
+        const result = await parseDWGtoSVG(ab);
+        if (result.metersPerUnit) { inferredMetersPerUnit = result.metersPerUnit; metersPerUnit = result.metersPerUnit; }
+        const blob = new Blob([result.svgString], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => { URL.revokeObjectURL(url); renderer.loadSvgBackground(img, result.bounds); resolve(); };
+          img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG fail')); };
+          img.src = url;
+        });
+        dwgLoaded = true;
+      } catch (e) {
+        console.warn('Project DWG libdxfrw failed:', e);
+      }
+      if (!dwgLoaded) {
+        try {
+          const dxfText = await convertDWGtoDXF(ab, data.cadFile.name);
+          const dxfData = parser.parse(dxfText);
           renderer.load(dxfData);
           _setupDxfLayerState(dxfData);
-          dxfLoaded = true;
-          document.getElementById('welcome').classList.add('hidden');
-          document.getElementById('btn-calib').disabled = false;
+          dwgLoaded = true;
+        } catch (e2) {
+          console.warn('Project DWG ODA failed:', e2);
+          throw new Error('底图 DWG 加载失败，请启动 DWG 转换服务或使用 DXF 文件。');
         }
-      } // end else (non-image CAD files)
       }
-
-      // Restore categories
-      if (data.categories) {
-        booths.CAT_COLORS = data.categories;
-        // Keep activeCat valid — the loaded project may not contain the
-        // default category, which would leave no selection and crash on place.
-        if (!booths.CAT_COLORS[activeCat]) {
-          activeCat = Object.keys(booths.CAT_COLORS)[0] || activeCat;
-        }
-        renderLegend();
+      if (dwgLoaded) {
+        dxfLoaded = true;
+        document.getElementById('welcome').classList.add('hidden');
+        document.getElementById('btn-calib').disabled = false;
       }
-      // Restore annotations
-      window.environmentUI?.restore(loadedEnvironment);
-      booths.items = data.items || [];
-      booths.nextId = data.nextId || (booths.items.length ? Math.max(...booths.items.map(i => i.id)) + 1 : 1);
-      booths.selectedId = null;
-      booths.selectedIds = new Set();
-      eraserMarks = data.eraserMarks || [];
-      if (data.metersPerUnit) { metersPerUnit = data.metersPerUnit; updateScaleInfo(); }
-      if (typeof data.darkMode === 'boolean' && data.darkMode !== darkMode) toggleTheme();
-
-      // Restore layer visibility (after CAD is loaded)
-      if (data.layerVisibility && Object.keys(_dwgLayerVisibility).length > 0) {
-        for (const [name, vis] of Object.entries(data.layerVisibility)) {
-          if (_dwgLayerVisibility.hasOwnProperty(name)) _dwgLayerVisibility[name] = vis;
-        }
-        populateLayerPanel();
-        _regenerateSvgBackground();
-      }
-
-      // Restore viewport
-      if (data.viewport) {
-        renderer.offsetX = data.viewport.offsetX;
-        renderer.offsetY = data.viewport.offsetY;
-        renderer.scale = data.viewport.scale;
-      }
-      hideProps();
-      render();
-      _autoSave();
-      document.getElementById('tool-hint').textContent = `项目已载入：${booths.items.length} 个标注`;
-    } catch (err) {
-      alert('项目文件读取失败：' + err.message);
-      console.error(err);
+    } else {
+      // Parse DXF
+      const content = new TextDecoder().decode(bytes);
+      const dxfData = parser.parse(content);
+      renderer.load(dxfData);
+      _setupDxfLayerState(dxfData);
+      dxfLoaded = true;
+      document.getElementById('welcome').classList.add('hidden');
+      document.getElementById('btn-calib').disabled = false;
     }
-  };
-  reader.readAsText(file);
-  input.value = '';
+  } // end else (non-image CAD files)
+  }
+
+  if (!data.cadFile?.base64) {
+    _cadFileData = null; renderer.dxfData = null;
+    renderer.useSvgBackground = renderer.useImageBackground = false;
+    renderer.svgImage = renderer.bgImage = null; renderer.svgBounds = renderer.imageBounds = null;
+    _dwgLayerVisibility = {}; _dwgEntitiesByLayer = {}; _dwgLayerColors = {}; _dwgBounds = null; _dwgBlockDefs = {};
+    _dxfFullData = null;
+    populateLayerPanel(); dxfLoaded = false;
+    document.getElementById('btn-calib').disabled = true;
+    document.getElementById('welcome').classList.toggle('hidden', data.items.length > 0);
+  }
+  _convertedDxfText = null; _convertedDxfName = null;
+  _siteInfo = data.site && typeof data.site.name === 'string' ? { name: data.site.name.slice(0, 100), eventName: String(data.site.eventName || '').slice(0, 200) } : null;
+  // Restore categories
+  if (data.categories) {
+    booths.CAT_COLORS = data.categories;
+    // Keep activeCat valid — the loaded project may not contain the
+    // default category, which would leave no selection and crash on place.
+    if (!booths.CAT_COLORS[activeCat]) {
+      activeCat = Object.keys(booths.CAT_COLORS)[0] || activeCat;
+    }
+    renderLegend();
+  }
+  // Restore annotations
+  window.environmentUI?.restore(loadedEnvironment);
+  booths.items = data.items || [];
+  booths.nextId = data.nextId || (booths.items.length ? Math.max(...booths.items.map(i => i.id)) + 1 : 1);
+  booths.selectedId = null;
+  booths.selectedIds = new Set();
+  eraserMarks = data.eraserMarks || [];
+  metersPerUnit = typeof data.metersPerUnit === 'number' && Number.isFinite(data.metersPerUnit) && data.metersPerUnit > 0 ? data.metersPerUnit : inferredMetersPerUnit;
+  updateScaleInfo();
+  if (typeof data.darkMode === 'boolean' && data.darkMode !== darkMode) toggleTheme();
+
+  // Restore layer visibility (after CAD is loaded)
+  if (data.layerVisibility && Object.keys(_dwgLayerVisibility).length > 0) {
+    for (const [name, vis] of Object.entries(data.layerVisibility)) {
+      if (_dwgLayerVisibility.hasOwnProperty(name)) _dwgLayerVisibility[name] = vis;
+    }
+    populateLayerPanel();
+    _regenerateSvgBackground();
+  }
+
+  // Restore viewport
+  if (data.viewport) {
+    renderer.offsetX = data.viewport.offsetX;
+    renderer.offsetY = data.viewport.offsetY;
+    renderer.scale = data.viewport.scale;
+  }
+  hideProps();
+  render();
+  _autoSave();
+  document.getElementById('tool-hint').textContent = `项目已载入：${booths.items.length} 个标注`;
+  window.dispatchEvent(new CustomEvent('needflea-project-loaded', { detail: { site: _siteInfo } }));
 }
+
+async function loadProject(input) {
+  const file = input.files[0]; if (!file) return;
+  input.value = '';
+  try { await applyProjectData(JSON.parse(await file.text())); }
+  catch (err) { alert('项目文件读取失败：' + err.message); console.error(err); }
+}
+window.projectIO = {
+  capture: captureProject,
+  load: applyProjectData,
+  setSite(info) { _siteInfo = info ? { name: String(info.name || '').slice(0, 100), eventName: String(info.eventName || '').slice(0, 200) } : null; },
+};
 window.saveProject = saveProject;
 window.loadProject = loadProject;
 

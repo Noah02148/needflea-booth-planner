@@ -80,6 +80,7 @@ try {
   assert.equal(await page.evaluate(() => environmentUI.snapshot().objects[1].height), 4.2);
   const photo = join(dir, 'floor.jpg');
   await sharp({ create: { width: 80, height: 80, channels: 3, background: '#afab98' } }).jpeg().toFile(photo);
+  await page.click('#env-method-marble');
   await (await page.$('#env-photos')).uploadFile(photo);
   await page.waitForFunction(() => environmentUI.snapshot().photos.length === 1);
   await page.click('[data-photo-place="0"]');
@@ -102,11 +103,13 @@ try {
   assert.deepEqual(await page.evaluate(() => environmentUI.snapshot().photos[0].camera), camera);
   assert.equal(await page.evaluate(() => _3dMode), true);
   assert.equal(await page.evaluate(() => booths.items.length), 5, 'Photo marking must not place or delete booths');
+  await page.click('#env-method-manual');
   await (await page.$('#env-texture')).uploadFile(photo);
   await page.waitForFunction(() => !!environmentUI.snapshot().floorTexture);
   console.log('Photos/material loaded');
   await page.click('#env-plan');
   await page.evaluate(() => booths.selectedIds.add(booths.items[0].id));
+  await page.click('#env-method-marble');
   await page.type('#env-notes', 'Wall');
   assert.equal(await page.evaluate(() => booths.items[0].angle), 0, 'Typing scene notes must not rotate the selected booth');
   await page.evaluate(() => { document.querySelector('#env-notes').value = '层高 4.2 米；柱位按 CAD'; document.querySelector('#env-notes').dispatchEvent(new Event('input')); });

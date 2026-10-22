@@ -14,7 +14,9 @@ NEED!FLEA 摊位规划工具：浏览器端 CAD 查看、场景图导入、摊�
 
 - 前端是纯 HTML / JavaScript / Canvas，无框架、打包步骤、数据库或业务后端。
 - `index.html`：页面、内联样式、事件入口和脚本引用。
+- `toolbar.js` / `toolbar.css`：顶部四个功能分组与响应式布局，保留原控件 ID / 内联事件。切换分组不得调用 setTool 或重置参数；setTool 通过 `needflea-tool-changed` 事件同步分组与当前工具提示。场地、保存、3D、环境入口及选择工具保持可见。改动后运行 `node scripts/check-toolbar.mjs` 并查看桌面 / 窄屏截图。
 - `app.js`：主控制器，负责导入、交互、图层、比例尺、保存/载入、自动保存和导出。
+- `site-library.js` / `site-library.css`：浏览器本地场地 / 多活动库。通过 `window.projectIO.capture/load/setSite` 复用项目逻辑；IndexedDB `needflea-site-library` v2 的 `sites` / `projects` 保存场地元数据 / 不含摊位的基础，`activities` / `activityProjects` 保存按 siteId 归属的活动元数据 / 独立完整项目。相关写入同事务提交。不要把完整 CAD / 照片塞进 localStorage。
 - `dxf-parser.js`：ASCII DXF 解析器，定义 `DXFParser`。
 - `renderer.js`：`DXFRenderer`，负责视口、CAD/SVG/图片底图渲染与坐标转换。
 - `booth.js`：`BoothSystem`，负责标注、摊位几何、样式、颜色及 DXF 导出。
@@ -28,16 +30,26 @@ NEED!FLEA 摊位规划工具：浏览器端 CAD 查看、场景图导入、摊�
 `libdxfrw.js` → `dxf-parser.js` → `renderer.js` → `booth.js` → `iso-renderer.js` → `app.js`。
 保留全局类、页面内联事件调用的 `window` 入口及加载顺序；不要直接套用模块化构建工具。
 
-新增场地环境功能是局部例外：`environment.js` 在 `app.js` 后加载，通过动态导入 `scene-three.js` 使用 Three.js ES modules；`index.html` 的 import map 指向 `vendor/three/` 的固定版本。不要将现有经典脚本全部迁移为模块。`environment.css` 提供环境面板样式及工具栏溢出处理。
+新增场地环境功能是局部例外：`environment.js` 在 `app.js` 后以 ES module 加载（共享 Marble contract 和 UI），通过动态导入 `scene-three.js` 使用 Three.js；`index.html` 的 import map 指向 `vendor/three/` 和 `vendor/spark/` 的固定版本。不要将现有经典 CAD 主脚本全部迁移为模块。`environment.css` 提供环境面板样式及工具栏溢出处理。
 
 `environment` 为项目 v3 的可选字段，schema 为 `needflea-environment/1`。对象中心 x/y 使用 CAD 世界坐标，尺寸 width/depth/height 使用米，角度为 CAD 平面逆时针角度；可用对象类型为 wall/column/platform。参考照片、地面材质内嵌于完整项目，不放入原有 localStorage 自动保存。照片生成由用户点击触发，先渲染预览，再应用或放弃；不要把照片估计值当作实测值。保留对象的 estimated/source 和 analysis 中的假设与待确认问题；floorPattern/floorTileMeters 用于参数化地面纹理。
 
 照片的可选 camera 字段含 x/y 拍摄点、targetX/targetY 朝向参考点，均为 CAD 世界坐标；方向只表示平面方位，不代表距离、楼层、拍摄高度或俯仰角。每张照片在二维底图两次点击标注，P 编号和箭头也显示在三维视图；退出/取消重标不得覆盖原位置或改变摊位。位置需在项目保存、导入导出及生成服务校验中完整保留；生成提示同时传递 camera 与文字说明。
 
-`environment-server.mjs` 是可选本地照片分析服务，监听 127.0.0.1:3003；`codex-environment-runner.mjs` 调用本机官方 Codex CLI，只接受 ChatGPT 订阅登录。拒绝 API Key 登录，清除子进程的 API Key/接口覆盖环境，使用 forced_login_method="chatgpt"，不得回退到另付费 API。通过 stdin 传递结构化场地资料、通过 --image 传入真实照片；使用只读、临时会话和隔离临时目录，不使用项目目录作为模型工作目录，不复制登录 token，完成后清理临时图片。用户在网页输入修改意见后可基于当前预览再生成，消耗当前 Codex 套餐额度。`environment-ai-contract.mjs` 校验浏览器与服务的输入输出。生成前后保留原环境，应用后保存。
+以下是保留的历史路径，当前网页不再提供此入口：`environment-server.mjs` 是本地照片分析服务，监听 127.0.0.1:3003；`codex-environment-runner.mjs` 调用本机官方 Codex CLI，只接受 ChatGPT 订阅登录。拒绝 API Key 登录，清除子进程的 API Key/接口覆盖环境，使用 forced_login_method="chatgpt"，不得回退到另付费 API。通过 stdin 传递结构化场地资料、通过 --image 传入真实照片；使用只读、临时会话和隔离临时目录，不使用项目目录作为模型工作目录，不复制登录 token，完成后清理临时图片。历史版本支持网页输入修改意见后再生成；当前面板已移除此工作流。`environment-ai-contract.mjs` 校验浏览器与服务的输入输出。生成前后保留原环境，应用后保存。
 
 
 ## 安装与启动
+
+Marble 为用户明确授权的独立付费生成路径，与 Codex 订阅简模分开。`marble-server.mjs` 本地监听 3004，从 `WORLDLABS_API_KEY` 或仓库外 `~/.config/needflea/marble.env` 读取密钥。禁止在网站目录、项目 JSON、日志、浏览器或测试输出中存真实密钥。Node 需 22.16+；默认任务目录为系统临时目录下 `needflea-marble`，长期使用需配置仓库外持久 `MARBLE_DATA_DIR`。网页确认费用后才 POST，不能自动重试可能已收费的请求；查询同一个 Operation 恢复进度。提交阶段用 NDJSON 返回实际图片整理 / 余额 / 提交状态与心跳；校验失败应明确本次未提交，不提示可能已扣费。多图重建最多 8 张照片，尺寸不同时由 marble-photo-input.mjs 等比缩放补边统一（不裁切、不拉伸，原图 / 标注保留），方向模式最多 4 张，完整全景单张 2:1。密钥不转发至资产下载域名。此服务仅允许本地页面，不能直接作为无认证公网后端。
+
+`environment.marble` 可选，保留 SPZ URL、精度、米制比例 / 地面元数据、CAD 对齐变换和已知费用；不内嵌大体积 SPZ。原始 Marble 坐标先米制化 / 地面对齐，再做 X 轴 180°转换，最后应用 CAD 校准，防止重复变换。Spark 生命周期独立于 CAD 场景重绘，避免每次调整摊位都重新下载或释放环境资源。对应点校准只拟合平面相似变换，不保证修复生成局部形变。
+
+新预览优先 100k，加载必须有阶段状态、有限超时和取消入口。服务通过 `/asset-status/:id/:file` 提供下载字节状态，不能泄露 CDN 签名或密钥；取消 / 失败只重试已有资源，不能重新提交生成。异步加载以令牌隔离，旧请求完成不得覆盖新预览；取消须恢复编辑并保留原环境。
+
+Marble 服务入口在支持的 Node 版本上启用 `http.setGlobalProxyFromEnv()`，遵循已有代理环境与 NO_PROXY；不要打印代理凭据。高清完整 SPZ 的下载 / 解码时限独立于轻量版（服务 10 分钟、网页下载 11 分钟、解码 2 分钟）。精度切换应保留内部视角，失败回滚原精度，取消造成的旧渲染 AbortError 不作为未捕获错误。
+
+Marble 默认从原始生成视点 (0,0,0) 经坐标变换进入内部查看，不能把包围盒外部俯视当作室内体验。内部查看暂时隐藏 CAD / 摊位 / 标签，恢复俯视时还原原可见性；此状态不写入项目。键盘导航仅在画布聚焦时生效，失焦清除按键，不劫持表单输入。对应点仍记录在原校准坐标系，查看方式不得影响保存和对齐结果。
 
 在仓库根目录执行，前提是已安装 Python 3；转换服务和辅助脚本另需 Node.js / npm。
 仓库没有声明 Node.js 版本，也没有 `dev`、`start`、`build`、`test` 或 `lint` npm scripts。
@@ -72,6 +84,8 @@ node dwg-server.mjs
 - 摊位位置/尺寸使用 `wx`、`wy`、`ww`、`wh`，旋转 `angle` 为绕中心的角度。修改几何时对照 `BoothSystem` 的实现，保持命中检测、吸附、2D、等轴测和导出一致。
 - 颜色优先通过 `booths.catColor(cat)` 读取，保留未知分类的兜底，避免载入不同分类的项目后崩溃。
 - 保存格式为 `version: 3`，含 `cadFile`、`categories`、`items`、比例尺、视口、图层及 `venue`；保持现有项目的载入兼容。
+- 可选 `site: {name,eventName}` 为可移植场地名称 / 活动备注。浏览器内部记录 ID 不随项目导出，外部 JSON 载入不能静默绑定或覆盖已有场地。切换仅显式载入、更新仅显式保存；有未保存改动先提示。无底图 / 比例尺的旧项目必须清除前一场地的背景和单位；加载或存储失败恢复原画布，不留半条场地记录。
+- 场地库 v1 升级至 v2 在升级事务中复制旧完整布局为首个活动，并另建空摊位的场地基础；失败必须回滚旧库。活动更新不能改变其他活动或场地基础，基础更新不能覆盖已有活动。活动名称仅在同一场地内去重。活动导入无底图 JSON 时继承明确选中的场地基础，此规则只适用于活动创建，不改变通用项目载入的清理规则。活动导出须自包含 CAD / 环境 / 布局；场地基础导出不声称包含全部活动。
 - `venue.schema` 为 `needflea-venue/1`，携带归一化几何、图层、边界及 SVG 快照。图片场景中 `venue` 为 `null`，底图由带 `isImage` 的 `cadFile` 保存。
 - `localStorage` 的 `needflea_autosave` 每 30 秒保存标注等部分状态，不包含完整 CAD 底图；完整备份使用项目 JSON。人工验证宜用独立浏览器上下文，避免影响已有自动保存。
 - `index.html` 中部分脚本有 `?v=` 缓存版本号；修改浏览器脚本并准备发布时检查对应引用。
@@ -79,11 +93,15 @@ node dwg-server.mjs
 
 ## 验证方式
 
+场地库或共享项目 I/O 改动运行 `node scripts/check-site-library.mjs`（3002 静态服务），覆盖 v1 升级迁移、多活动隔离、JSON / 空布局 / 当前画布创建、基础与活动独立更新、刷新载入、未保存取消、无底图继承、无效导入、事务失败恢复、活动备份与移动端排版。DWG 无样本时须明确未验证。共享保存载入改动同时运行环境、面板和 Marble 回归。
+
+Marble 变更运行 `node scripts/check-marble.mjs`（先启动 3002 静态服务）：模拟官方 API，无真实费用，生成真实合成 SPZ 检查 Spark 渲染、相机 / CAD 选点、比例与坐标变换、预览应用、旧项目清理、任务幂等和重启恢复。涉及三维时同时运行现有三组环境 / Codex 检查并查看截图。真实 API 验证必须区分不计费的余额查询与会计费的生成；不自动用用户照片付费生成。
+
 当前无统一测试框架、lint 配置或仓库内 CI 工作流。不要声称 `npm test` 可用，也不要将实验脚本成功当成完整回归通过。
 
 场地环境新增浏览器回归脚本：启动静态服务后运行 `node scripts/check-environment.mjs`（默认端口 3002，可通过 `NEEDFLEA_URL` 更改）。脚本生成隔离的 CAD/图片样本，验证环境放置、尺寸编辑、照片/材质、JSON 导入校验、PNG 导出、保存载入、旧项目和 WebGL 失败回退；输出截图在系统临时目录。涉及三维功能时运行该脚本并检查截图。Three.js 依赖升级后同步 `vendor/three/` 文件和 MIT 许可证，见其 README。
 
-照片生成改动另运行 `node scripts/check-photo-generation.mjs`（模拟 Codex，不消耗额度）及 `node scripts/check-codex-environment.mjs`（CLI 参数、图片附件、隔离与清理测试）。`node scripts/check-codex-environment.mjs --live` 会使用本机 ChatGPT 登录做一次合成图片真实模型测试，消耗现有套餐额度；仅在用户授权相关模型功能时使用。报告时区分模拟流程验证、真实登录连通测试和现场识别精度。
+两种输入方式 UI 改动运行 `node scripts/check-photo-generation.mjs`（现验证手动 / Marble 标签页、数据保留、键盘导航和无旧 Codex 连接，不消耗额度）。保留的旧服务变更运行 `node scripts/check-codex-environment.mjs`（CLI 参数、图片附件、隔离与清理测试）。`node scripts/check-codex-environment.mjs --live` 消耗现有套餐额度，仅在用户授权相关模型功能时使用。不要把旧服务检查描述成当前网页仍提供 Codex 入口。
 
 
 - 只改文档时检查内容、命令与代码是否一致，并运行 `git diff --check`。
@@ -96,6 +114,8 @@ node dwg-server.mjs
 - 汇报时区分实际执行的检查、人工验证及缺少样本/环境而未执行的部分。
 
 ## 当前开发状态与已知限制
+
+- 场地环境面板仅提供“手动增加环境”和“Marble 生成”。手动包含地面材质、结构尺寸 / 放置 / 编辑、折叠的 JSON 工具；Marble 包含照片 / 拍摄标注、生成要求、费用与任务、预览校准。视图、图片导出和完整项目保存共用。切换不改项目数据、不清除照片或对象；手动模式恢复轨道视角。未完成预览时禁止切换，加载可取消，后台生成不因切换而重新提交。视频输入尚未接入。旧 Codex 照片简模入口已移除，页面不连接 3003；旧项目 analysis / generationPrompt 继续保留，服务文件保留供历史使用。
 
 - 本次整理前 Git 工作区干净。最近业务提交 `10d9931` 增加复合摊位（盘扣架/帐篷＋空地）、邻近吸附时的支架角位、分类颜色兜底及自包含项目 JSON；后续提交主要更新域名与 README。
 - README 记录 GitHub Pages 静态部署，`CNAME` 指向 `booth-planner.pbrick.cn`。线上是否可达不由本地文件保证；不要为普通开发任务改动域名或部署配置。

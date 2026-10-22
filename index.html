@@ -4,9 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NEED! FLEA — 摊位规划工具</title>
-<link rel="stylesheet" href="environment.css?v=6">
+<link rel="stylesheet" href="environment.css?v=10">
+<link rel="stylesheet" href="site-library.css?v=2">
 <script type="importmap">
-{"imports":{"three":"./vendor/three/three.module.js"}}
+{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/","@sparkjsdev/spark":"./vendor/spark/spark.module.js"}}
 </script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -195,25 +196,44 @@
   }
   #drop-hint.show { display: flex; }
 </style>
+<link rel="stylesheet" href="toolbar.css?v=1">
 </head>
 <body>
 
 <!-- TOP BAR -->
-<div id="topbar">
-  <div class="logo">NEED!<span>FLEA</span></div>
-  <div class="tb-sep"></div>
-  <button class="tb-btn" onclick="document.getElementById('file-input').click()">
+<div id="topbar" aria-label="规划工具栏">
+  <div class="toolbar-header">
+    <div class="logo">NEED!<span>FLEA</span></div>
+    <button class="tb-btn" id="site-library-button" onclick="openSiteLibrary()">🏛 选择场地</button>
+    <div class="toolbar-tabs" role="tablist" aria-label="功能分组">
+      <button class="toolbar-tab" id="toolbar-tab-files" type="button" role="tab" aria-controls="toolbar-panel-files" aria-selected="false" tabindex="-1" data-toolbar-group="files">场地与文件</button>
+      <button class="toolbar-tab" id="toolbar-tab-layout" type="button" role="tab" aria-controls="toolbar-panel-layout" aria-selected="true" tabindex="0" data-toolbar-group="layout">摊位与设施</button>
+      <button class="toolbar-tab" id="toolbar-tab-draw" type="button" role="tab" aria-controls="toolbar-panel-draw" aria-selected="false" tabindex="-1" data-toolbar-group="draw">绘图与测量</button>
+      <button class="toolbar-tab" id="toolbar-tab-view" type="button" role="tab" aria-controls="toolbar-panel-view" aria-selected="false" tabindex="-1" data-toolbar-group="view">视图与导出</button>
+    </div>
+    <div class="toolbar-quick">
+      <button class="tb-btn" onclick="saveProject()" title="保存完整项目 JSON">💾 保存</button>
+      <button class="tb-btn" id="btn-3d" onclick="toggle3DView()">🧊 3D</button>
+      <button class="tb-btn" id="btn-environment" onclick="openEnvironment()">🏛 场地环境</button>
+    </div>
+  </div>
+  <div class="toolbar-context">
+    <div class="toolbar-selection"><button class="tb-btn active" id="btn-select" onclick="setTool('select')">▷ 选择</button><span id="toolbar-current-tool" role="status">当前：选择</span></div>
+    <div class="toolbar-panel" id="toolbar-panel-files" role="tabpanel" aria-labelledby="toolbar-tab-files" hidden>
+      <button class="tb-btn" onclick="document.getElementById('file-input').click()">
     📂 导入底图
   </button>
-  <input type="file" id="file-input" accept=".dxf,.DXF,.dwg,.DWG,.jpg,.jpeg,.png,.webp,.bmp" onchange="loadCADFile(this)">
-  <button class="tb-btn" id="btn-calib" onclick="startCalib()" disabled>
+      <button class="tb-btn" id="btn-calib" onclick="startCalib()" disabled>
     📐 定比例尺
   </button>
-  <div class="tb-sep"></div>
-
-  <!-- TOOL BUTTONS -->
-  <button class="tb-btn active" id="btn-select" onclick="setTool('select')">▷ 选择</button>
-  <select class="tb-btn" id="btn-booth" onchange="setBoothStyle(this.value)" onfocus="setBoothStyle(this.value)">
+      <div class="tb-sep"></div>
+      <button class="tb-btn" onclick="document.getElementById('load-input').click()">📂 载入 JSON</button>
+      <span class="toolbar-note">JSON 项目备份</span>
+      <div class="tb-spacer"></div>
+      <button class="tb-btn danger" onclick="clearAnnotations()">🗑 清空</button>
+    </div>
+    <div class="toolbar-panel" id="toolbar-panel-layout" role="tabpanel" aria-labelledby="toolbar-tab-layout">
+        <select class="tb-btn" id="btn-booth" onchange="setBoothStyle(this.value)" onfocus="setBoothStyle(this.value)">
     <option value="tent">⬜ 盘扣架帐篷</option>
     <option value="canopy">⛺ 四角帐篷</option>
     <option value="table">▦ 空地</option>
@@ -242,45 +262,45 @@
     <input type="number" id="custom-h" value="3" min="0.5" max="50" step="0.5" style="width:46px" title="长(米)">
     <span style="color:var(--text3);font-size:12px">m</span>
   </span>
-  <div class="tb-sep"></div>
-  <button class="tb-btn" id="btn-guard" onclick="setTool('guard')">👮 安保</button>
-  <button class="tb-btn" id="btn-fire" onclick="setTool('fire')">🧯 灭火器</button>
-  <button class="tb-btn" id="btn-arrow" onclick="setTool('arrow')">→ 动线</button>
-  <button class="tb-btn" id="btn-zone" onclick="setTool('zone')">T 文字</button>
-  <button class="tb-btn" id="btn-line" onclick="setTool('line')">✏ 画线</button>
-  <select id="line-style" title="线条样式">
+
+      <button class="tb-btn" id="btn-guard" onclick="setTool('guard')">👮 安保</button>
+      <button class="tb-btn" id="btn-fire" onclick="setTool('fire')">🧯 灭火器</button>
+      <div class="tb-sep"></div>
+      <button class="tb-btn" onclick="batchNumber()">🔢 批量编号</button>
+    </div>
+    <div class="toolbar-panel" id="toolbar-panel-draw" role="tabpanel" aria-labelledby="toolbar-tab-draw" hidden>
+      <button class="tb-btn" id="btn-arrow" onclick="setTool('arrow')">→ 动线</button>
+      <button class="tb-btn" id="btn-zone" onclick="setTool('zone')">T 文字</button>
+      <button class="tb-btn" id="btn-line" onclick="setTool('line')">✏ 画线</button>
+      <select id="line-style" title="线条样式">
     <option value="solid">实线</option>
     <option value="dashed">虚线</option>
   </select>
-  <div class="tb-sep"></div>
-  <button class="tb-btn" id="btn-measure" onclick="setTool('measure')">📏 测距</button>
-  <button class="tb-btn" id="btn-dim" onclick="setTool('dim')">📐 标距</button>
-  <button class="tb-btn" id="btn-area" onclick="setTool('area')">⬡ 测面积</button>
-  <button class="tb-btn" id="btn-eraser" onclick="setTool('eraser')">🧹 橡皮擦</button>
-  <div class="tb-sep"></div>
-  <button class="tb-btn" onclick="batchNumber()">🔢 批量编号</button>
-
-  <div class="tb-spacer"></div>
-  <button class="tb-btn" onclick="saveProject()">💾 保存</button>
-  <button class="tb-btn" onclick="document.getElementById('load-input').click()">📂 载入</button>
-  <input type="file" id="load-input" accept=".json" onchange="loadProject(this)" style="display:none">
-  <div class="tb-sep"></div>
-  <button class="tb-btn" id="btn-theme" onclick="toggleTheme()">☀ 白底</button>
-  <select class="tb-btn" id="btn-export-plan" onchange="exportPlanMenu(this)" title="摊位图导出">
+      <div class="tb-sep"></div>
+      <button class="tb-btn" id="btn-measure" onclick="setTool('measure')">📏 测距</button>
+      <button class="tb-btn" id="btn-dim" onclick="setTool('dim')">📐 标距</button>
+      <button class="tb-btn" id="btn-area" onclick="setTool('area')">⬡ 测面积</button>
+      <button class="tb-btn" id="btn-eraser" onclick="setTool('eraser')">🧹 橡皮擦</button>
+    </div>
+    <div class="toolbar-panel" id="toolbar-panel-view" role="tabpanel" aria-labelledby="toolbar-tab-view" hidden>
+      <button class="tb-btn" id="btn-theme" onclick="toggleTheme()">☀ 白底</button>
+      <div class="tb-sep"></div>
+      <select class="tb-btn" id="btn-export-plan" onchange="exportPlanMenu(this)" title="摊位图导出">
     <option value="" selected disabled hidden>🖼 摊位图</option>
     <option value="full">💾 全图</option>
     <option value="crop">✂ 截取</option>
   </select>
-  <select class="tb-btn" id="btn-export-zone" onchange="exportZoneMenu(this)" title="区域示意图导出，模糊摊位数量">
+      <select class="tb-btn" id="btn-export-zone" onchange="exportZoneMenu(this)" title="区域示意图导出，模糊摊位数量">
     <option value="" selected disabled hidden>🗺 区域图</option>
     <option value="full">💾 全图</option>
     <option value="crop">✂ 截取</option>
   </select>
-  <button class="tb-btn" onclick="exportDXF()">📤 DXF</button>
-  <button class="tb-btn" id="btn-3d" onclick="toggle3DView()">🧊 3D</button>
-  <button class="tb-btn" id="btn-environment" onclick="openEnvironment()">🏛 场地环境</button>
-  <button class="tb-btn" onclick="downloadConvertedDXF()">💾 底图DXF</button>
-  <button class="tb-btn danger" onclick="clearAnnotations()">🗑 清空</button>
+      <button class="tb-btn" onclick="exportDXF()">📤 DXF</button>
+      <button class="tb-btn" onclick="downloadConvertedDXF()">💾 底图DXF</button>
+    </div>
+  </div>
+  <input type="file" id="file-input" accept=".dxf,.DXF,.dwg,.DWG,.jpg,.jpeg,.png,.webp,.bmp" onchange="loadCADFile(this)">
+  <input type="file" id="load-input" accept=".json" onchange="loadProject(this)" style="display:none">
 </div>
 
 <!-- MAIN -->
@@ -293,7 +313,7 @@
     <div id="welcome">
       <div class="icon">📐</div>
       <h2>拖入 DXF/DWG 或场景图片开始</h2>
-      <p>或点击左上角「导入底图」按钮（支持 DXF/DWG/JPG/PNG）</p>
+      <p>或打开「场地与文件 → 导入底图」（支持 DXF/DWG/JPG/PNG）</p>
     </div>
     <div id="drop-hint">松开鼠标导入文件</div>
 
@@ -432,7 +452,9 @@
 <script src="renderer.js?v=8"></script>
 <script src="booth.js?v=8"></script>
 <script src="iso-renderer.js?v=1"></script>
-<script src="app.js?v=16"></script>
-<script src="environment.js?v=6"></script>
+<script src="app.js?v=18"></script>
+<script src="toolbar.js?v=1"></script>
+<script src="site-library.js?v=2"></script>
+<script type="module" src="environment.js?v=12"></script>
 </body>
 </html>
