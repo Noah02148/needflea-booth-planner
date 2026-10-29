@@ -49,3 +49,9 @@
   .toolbar-tab { padding: 0 7px; }
   .toolbar-panel { gap: 6px; }
 }
+
+.layout-subtabs { display:flex; gap:4px; padding-right:10px; border-right:1px solid #ffffff20; }
+.layout-subtabs [aria-selected=true] { color:var(--green); border-color:var(--green); }
+.layout-controls, #layout-component-buttons, #layout-component-buttons .env-component-grid { display:flex; gap:8px; align-items:center; flex-shrink:0; }
+.layout-controls[hidden] { display:none; }
+#layout-component-buttons button { white-space:nowrap; }

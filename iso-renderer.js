@@ -21,7 +21,7 @@ class IsoRenderer {
     this.tilt = Math.PI / 6;
 
     // Heights (meters)
-    this.TENT_WALL_H = 2.0;  // 雷亚架 frame height
+    this.TENT_WALL_H = 2.5;  // 雷亚架 frame height
 
     // Drag rotation state
     this._dragging = false;
@@ -177,7 +177,7 @@ class IsoRenderer {
     items3d.forEach(item => {
       const col = this._getColor(item, boothSystem);
       const labelH = item.style === 'table' ? 0.5
-                   : (item.style === 'canopy' || item.style === 'canopy-yard') ? (this.TENT_WALL_H + 0.35 + 0.3)
+                   : (item.style === 'canopy' || item.style === 'canopy-yard') ? (this.TENT_WALL_H + 0.3)
                    : (this.TENT_WALL_H + 0.4);
       this._drawBoothLabel(ctx, item, col, isDark, labelH);
     });
@@ -403,7 +403,7 @@ class IsoRenderer {
   _drawTent(ctx, item, boothSystem, isDark) {
     const col = this._getColor(item, boothSystem);
     const hw = item.mw / 2, hh = item.mh / 2;
-    const H = this.TENT_WALL_H; // full height 2m
+    const H = this.TENT_WALL_H; // full height 2.5m
 
     // Corner positions at various heights
     const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
@@ -503,8 +503,8 @@ class IsoRenderer {
   _drawCanopy(ctx, item, boothSystem, isDark) {
     const col = this._getColor(item, boothSystem);
     const hw = item.mw / 2, hh = item.mh / 2;
-    const H = this.TENT_WALL_H;       // eave height ~2m
-    const peakH = H + 0.35;           // slight center peak
+    const H = this.TENT_WALL_H - 0.5; // 2.5m overall, including roof
+    const peakH = this.TENT_WALL_H;           // slight center peak
 
     const at = (dx, dy, z) => this.toScreen(item.mx + dx, item.my + dy, z);
 

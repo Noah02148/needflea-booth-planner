@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NEED! FLEA — 摊位规划工具</title>
-<link rel="stylesheet" href="environment.css?v=10">
-<link rel="stylesheet" href="site-library.css?v=2">
+<link rel="stylesheet" href="environment.css?v=13">
+<link rel="stylesheet" href="site-library.css?v=3">
 <script type="importmap">
-{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/","@sparkjsdev/spark":"./vendor/spark/spark.module.js"}}
+{"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/"}}
 </script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -196,7 +196,7 @@
   }
   #drop-hint.show { display: flex; }
 </style>
-<link rel="stylesheet" href="toolbar.css?v=1">
+<link rel="stylesheet" href="toolbar.css?v=2">
 </head>
 <body>
 
@@ -204,7 +204,6 @@
 <div id="topbar" aria-label="规划工具栏">
   <div class="toolbar-header">
     <div class="logo">NEED!<span>FLEA</span></div>
-    <button class="tb-btn" id="site-library-button" onclick="openSiteLibrary()">🏛 选择场地</button>
     <div class="toolbar-tabs" role="tablist" aria-label="功能分组">
       <button class="toolbar-tab" id="toolbar-tab-files" type="button" role="tab" aria-controls="toolbar-panel-files" aria-selected="false" tabindex="-1" data-toolbar-group="files">场地与文件</button>
       <button class="toolbar-tab" id="toolbar-tab-layout" type="button" role="tab" aria-controls="toolbar-panel-layout" aria-selected="true" tabindex="0" data-toolbar-group="layout">摊位与设施</button>
@@ -213,26 +212,23 @@
     </div>
     <div class="toolbar-quick">
       <button class="tb-btn" onclick="saveProject()" title="保存完整项目 JSON">💾 保存</button>
-      <button class="tb-btn" id="btn-3d" onclick="toggle3DView()">🧊 3D</button>
-      <button class="tb-btn" id="btn-environment" onclick="openEnvironment()">🏛 场地环境</button>
+      <button class="tb-btn" id="btn-environment" onclick="openEnvironment()" aria-controls="environment-panel" aria-expanded="false" title="结构高度、方案布置、二维 / 三维与出图">🏛 场景搭建</button>
     </div>
   </div>
   <div class="toolbar-context">
     <div class="toolbar-selection"><button class="tb-btn active" id="btn-select" onclick="setTool('select')">▷ 选择</button><span id="toolbar-current-tool" role="status">当前：选择</span></div>
     <div class="toolbar-panel" id="toolbar-panel-files" role="tabpanel" aria-labelledby="toolbar-tab-files" hidden>
-      <button class="tb-btn" onclick="document.getElementById('file-input').click()">
-    📂 导入底图
-  </button>
-      <button class="tb-btn" id="btn-calib" onclick="startCalib()" disabled>
-    📐 定比例尺
-  </button>
+      <button class="tb-btn" id="site-library-button" onclick="openSiteLibrary()">🏛 选择场地</button>
+      <button class="tb-btn" id="btn-site-setup" onclick="openSiteSetup()">📐 建立场地</button>
+      <span class="toolbar-note" id="toolbar-site-status">CAD / 图片 / 实测</span>
       <div class="tb-sep"></div>
-      <button class="tb-btn" onclick="document.getElementById('load-input').click()">📂 载入 JSON</button>
-      <span class="toolbar-note">JSON 项目备份</span>
+      <button class="tb-btn" onclick="document.getElementById('load-input').click()">📂 导入项目 JSON</button>
       <div class="tb-spacer"></div>
-      <button class="tb-btn danger" onclick="clearAnnotations()">🗑 清空</button>
+      <button class="tb-btn danger" onclick="clearAnnotations()">🗑 清空标注</button>
     </div>
     <div class="toolbar-panel" id="toolbar-panel-layout" role="tabpanel" aria-labelledby="toolbar-tab-layout">
+      <div class="layout-subtabs" role="tablist" aria-label="摊位与设施类型"><button class="tb-btn" id="layout-tab-booths" role="tab" aria-selected="true" aria-controls="layout-booths" tabindex="0">摊位</button><button class="tb-btn" id="layout-tab-components" role="tab" aria-selected="false" aria-controls="layout-components" tabindex="-1">活动组件</button></div>
+      <div id="layout-booths" class="layout-controls" role="tabpanel" aria-labelledby="layout-tab-booths">
         <select class="tb-btn" id="btn-booth" onchange="setBoothStyle(this.value)" onfocus="setBoothStyle(this.value)">
     <option value="tent">⬜ 盘扣架帐篷</option>
     <option value="canopy">⛺ 四角帐篷</option>
@@ -263,10 +259,13 @@
     <span style="color:var(--text3);font-size:12px">m</span>
   </span>
 
+      <span class="toolbar-note">帐篷总高 2.5m</span>
       <button class="tb-btn" id="btn-guard" onclick="setTool('guard')">👮 安保</button>
       <button class="tb-btn" id="btn-fire" onclick="setTool('fire')">🧯 灭火器</button>
       <div class="tb-sep"></div>
       <button class="tb-btn" onclick="batchNumber()">🔢 批量编号</button>
+      </div>
+      <div id="layout-components" class="layout-controls" role="tabpanel" aria-labelledby="layout-tab-components" hidden><div id="layout-component-buttons"></div><button class="tb-btn" id="layout-component-properties" onclick="openLayoutComponents()">组件属性</button></div>
     </div>
     <div class="toolbar-panel" id="toolbar-panel-draw" role="tabpanel" aria-labelledby="toolbar-tab-draw" hidden>
       <button class="tb-btn" id="btn-arrow" onclick="setTool('arrow')">→ 动线</button>
@@ -313,7 +312,7 @@
     <div id="welcome">
       <div class="icon">📐</div>
       <h2>拖入 DXF/DWG 或场景图片开始</h2>
-      <p>或打开「场地与文件 → 导入底图」（支持 DXF/DWG/JPG/PNG）</p>
+      <p>或打开「场地与文件 → 建立场地」，选择 CAD、图片或实测新建</p>
     </div>
     <div id="drop-hint">松开鼠标导入文件</div>
 
@@ -451,11 +450,13 @@
 <script src="cad-text.js?v=1"></script>
 <script src="dxf-parser.js?v=9"></script>
 <script src="renderer.js?v=9"></script>
-<script src="booth.js?v=8"></script>
-<script src="iso-renderer.js?v=1"></script>
-<script src="app.js?v=19"></script>
-<script src="toolbar.js?v=1"></script>
-<script src="site-library.js?v=2"></script>
-<script type="module" src="environment.js?v=12"></script>
+<script src="booth.js?v=9"></script>
+<script src="iso-renderer.js?v=2"></script>
+<script src="app.js?v=22"></script>
+<script src="toolbar.js?v=3"></script>
+<script src="cloud-config.js?v=1"></script>
+<script src="site-cloud.js?v=1"></script>
+<script src="site-library.js?v=4"></script>
+<script type="module" src="environment.js?v=16"></script>
 </body>
 </html>

@@ -28,7 +28,7 @@ try{
     r.onsuccess=()=>{const db=r.result,tx=db.transaction(['sites','projects'],'readwrite');tx.objectStore('sites').put({id:'fixture-site',name:project.site.name,eventName:project.site.eventName,createdAt:1,updatedAt:2,sourceName:project.cadFile.name,itemCount:1});tx.objectStore('projects').put({id:'fixture-site',project});tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>reject(tx.error);};r.onerror=()=>reject(r.error);
   }),project);
   const idle=()=>page.waitForFunction(()=>document.querySelector('#site-library-dialog').getAttribute('aria-busy')==='false');
-  const open=async()=>{await page.click('#site-library-button');await idle();};
+  const open=async()=>{await page.click('#toolbar-tab-files');await page.click('#site-library-button');await idle();};
   const dbGet=(store,id)=>page.evaluate(({store,id})=>new Promise((resolve,reject)=>{const r=indexedDB.open('needflea-site-library',2);r.onsuccess=()=>{const db=r.result,tx=db.transaction(store),q=id?tx.objectStore(store).get(id):tx.objectStore(store).getAll();tx.oncomplete=()=>{db.close();resolve(q.result);};tx.onerror=()=>reject(tx.error);};}),{store,id});
   const load=async id=>{await page.click(`[data-activity-load="${id}"]`);await page.waitForFunction(()=>!document.querySelector('#site-library-dialog').open);};
   const createActivity=async(name,source,file)=>{
@@ -91,7 +91,7 @@ try{
     r.onsuccess=()=>{const db=r.result,tx=db.transaction(['sites','projects'],'readwrite');tx.objectStore('sites').put({id:'old',name:'待迁移场地',eventName:'旧活动'});tx.objectStore('projects').put({id:'old',project});tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>reject(tx.error);};
   }),project);
   await migrationPage.evaluate(()=>{const put=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(...args){if(this.name==='activityProjects')throw new DOMException('模拟升级存储失败','QuotaExceededError');return put.apply(this,args);};});
-  await migrationPage.click('#site-library-button');await migrationPage.waitForFunction(()=>document.querySelector('#site-library-dialog').getAttribute('aria-busy')==='false');
+  await migrationPage.click('#toolbar-tab-files');await migrationPage.click('#site-library-button');await migrationPage.waitForFunction(()=>document.querySelector('#site-library-dialog').getAttribute('aria-busy')==='false');
   assert.match(await migrationPage.$eval('#site-message',e=>e.textContent),/升级或打开失败/);
   const retained=await migrationPage.evaluate(()=>new Promise(resolve=>{const r=indexedDB.open('needflea-site-library',1);r.onsuccess=()=>{const db=r.result,tx=db.transaction('projects'),q=tx.objectStore('projects').get('old');tx.oncomplete=()=>{const result={version:db.version,project:q.result.project};db.close();resolve(result);};};}));
   assert.equal(retained.version,1);assert.deepEqual(retained.project,project);await context.close();

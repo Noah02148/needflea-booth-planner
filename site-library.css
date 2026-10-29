@@ -22,5 +22,12 @@
 #site-list { max-height: 210px; overflow-y: auto; }
 #site-activity-list { max-height: 300px; overflow-y: auto; margin-top: 12px; }
 .site-record-selected { border-color: #23805e; background: #23805e08; }
+.site-storage-picker { display: flex; gap: 6px; margin: 14px 0 8px; }
+.site-storage-picker button { flex: 1; }
+.site-storage-picker [aria-pressed="true"], #site-cloud-login { background: #23805e !important; border-color: #23805e !important; color: #fff !important; }
+#site-library-dialog [hidden] { display: none !important; }
+#site-cloud-section { border: 1px solid var(--border); padding: 14px; border-radius: 8px; }
+#site-cloud-section details { margin-top: 0; padding-top: 0; border: 0; }
+#site-cloud-url { font-size: 12px !important; }
 #site-library-dialog details { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 16px; }
 #site-library-dialog summary { font-weight: 600; font-size: 14px; cursor: pointer; }

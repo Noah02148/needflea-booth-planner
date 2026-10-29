@@ -28,13 +28,17 @@ try {
   await page.keyboard.press('ArrowRight'); assert.equal(await activeGroup(), 'files');
   await page.keyboard.press('End'); assert.equal(await activeGroup(), 'view');
   await page.keyboard.press('Home'); assert.equal(await activeGroup(), 'files');
+  await page.click('#btn-site-setup');
+  assert.equal(await page.$$eval('#toolbar-panel-files #btn-calib', es => es.length), 0);
+  assert.equal(await page.$$eval('#btn-calib', es => es.length), 1);
   const chooser = page.waitForFileChooser();
-  await page.click('button[onclick="document.getElementById(\'file-input\').click()"]');
+  await page.click('#env-source-cad');
   const dxf = ['0','SECTION','2','ENTITIES',...[[0,0,20,0],[20,0,20,15],[20,15,0,15],[0,15,0,0]].flatMap(([a,b,c,d]) => ['0','LINE','8','Walls','10',a,'20',b,'11',c,'21',d]),'0','ENDSEC','0','EOF'].join('\n');
   const file = join(dir, 'venue.dxf'); await writeFile(file, dxf);
   await (await chooser).accept([file]);
   await page.waitForFunction(() => dxfLoaded);
-  await page.evaluate(() => { metersPerUnit = 1; });
+  await page.evaluate(() => { metersPerUnit = 1; updateScaleInfo(); });
+  await page.click('#env-close');
   await group('layout');
   await page.select('#btn-booth', 'tent-yard');
   assert.equal(await page.evaluate(() => tool), 'booth');
@@ -51,6 +55,10 @@ try {
   await group('files');
   assert.equal(await page.evaluate(() => tool), 'line');
   assert.equal(await page.evaluate(() => JSON.stringify(lineState)), before, 'Partial drawing survives group switching');
+  await page.click('#btn-site-setup');
+  assert.equal(await page.evaluate(() => tool), 'line');
+  assert.equal(await page.evaluate(() => JSON.stringify(lineState)), before, 'Opening site setup preserves partial drawing');
+  await page.click('#env-close');
   await group('layout');
   assert.equal(await page.$eval('#btn-booth', e => e.value), 'tent-yard');
   assert.equal(await page.$eval('#custom-w', e => e.value), '4');
@@ -70,13 +78,17 @@ try {
   for (const width of [1024, 768, 390, 360]) {
     await page.setViewport({ width, height: 900 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No page overflow at ' + width);
-    for (const selector of ['#site-library-button', '#btn-3d', '#btn-environment', '.toolbar-quick button', '#toolbar-tab-view']) {
+    for (const selector of ['#btn-environment', '.toolbar-quick button', '#toolbar-tab-view']) {
       assert.ok(await page.$eval(selector, e => { const r = e.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0; }), selector + ' reachable at ' + width);
     }
     for (const key of ['files', 'layout', 'draw', 'view']) { await group(key); await onlyOne(); }
   }
-  await group('layout');
+  await group('files');
   await page.screenshot({ path: join(dir, 'mobile.png') });
+  await group('files');
+  assert.equal(await page.$('#btn-3d'), null, 'Only the unified scene launcher is present');
+  assert.equal(await page.$$eval('.toolbar-header #site-library-button', es => es.length), 0);
+  assert.equal(await page.$$eval('#toolbar-panel-files #site-library-button', es => es.length), 1);
   await page.click('#site-library-button');
   await page.waitForFunction(() => document.querySelector('#site-library-dialog').open);
   assert.deepEqual(errors, []);

@@ -35,8 +35,9 @@ const download = async (action, name) => {
 try {
   await page.goto(url, { waitUntil: 'networkidle0' });
   console.log('Page loaded');
-  await page.click('#btn-3d');
-  assert.match(dialogs.pop(), /比例尺/);
+  await page.click('#btn-environment');
+  assert.equal(await page.$eval('#env-base-panel', e => e.hidden), false);
+  await page.click('#env-close');
   const dxf = ['0','SECTION','2','ENTITIES', ...[[0,0,20000,0],[20000,0,20000,15000],[20000,15000,0,15000],[0,15000,0,0],[4000,0,4000,15000]].flatMap(([x1,y1,x2,y2]) => ['0','LINE','8','Walls','10',x1,'20',y1,'11',x2,'21',y2]), '0','ENDSEC','0','EOF'].join('\n');
   const dxfPath = join(dir, 'venue.dxf'); await writeFile(dxfPath, dxf);
   const fileInput = await page.$('input[type=file][accept*=".dxf" i]');
@@ -58,8 +59,9 @@ try {
     }); render();
   });
   await page.click('#btn-environment');
+  await page.click(await page.$eval('#env-base-panel', e => e.hidden) ? '#env-step-structure' : '#env-continue');
   await page.waitForSelector('#scene-three canvas', { visible: true });
-  await page.waitForFunction(() => !document.querySelector('#btn-3d').disabled);
+  await page.waitForFunction(() => !document.querySelector('#btn-environment').disabled);
   console.log('Three.js initialized');
   assert.equal(await page.$eval('#canvas', e => e.style.visibility), 'hidden');
   await page.click('[data-env-add="column"]');
@@ -74,15 +76,16 @@ try {
   assert.equal(placed[0].height, 3); assert.ok(placed[1].width > 0.01);
   // Editing a selected object must keep selection and exact dimensions.
   await page.evaluate(() => {
-    const inputs = document.querySelectorAll('#env-object-editor input');
-    inputs[4].value = '4.2'; inputs[4].dispatchEvent(new Event('change'));
+    const input = document.querySelector('#env-object-editor input[name=height]');
+    input.value = '4.2'; input.dispatchEvent(new Event('change'));
   });
   assert.equal(await page.evaluate(() => environmentUI.snapshot().objects[1].height), 4.2);
   const photo = join(dir, 'floor.jpg');
   await sharp({ create: { width: 80, height: 80, channels: 3, background: '#afab98' } }).jpeg().toFile(photo);
-  await page.click('#env-method-marble');
+  await page.click('#env-step-base');
   await (await page.$('#env-photos')).uploadFile(photo);
   await page.waitForFunction(() => environmentUI.snapshot().photos.length === 1);
+  await page.$eval('#env-photos', e => { e.closest('details').open = true; });
   await page.click('[data-photo-place="0"]');
   await page.waitForFunction(() => environmentUI.isPhotoPositioning() && !_3dMode);
   const posePoints = await page.evaluate(() => { const r = canvas.getBoundingClientRect(); return [[6000, 5000], [9000, 8000]].map(([x, y]) => ({ x: r.left + renderer.wx(x), y: r.top + renderer.wy(y) })); });
@@ -90,31 +93,35 @@ try {
   await page.mouse.move(posePoints[1].x, posePoints[1].y);
   await page.screenshot({ path: join(dir, 'photo-camera-preview.png') });
   await page.mouse.click(posePoints[1].x, posePoints[1].y);
-  await page.waitForFunction(() => !environmentUI.isPhotoPositioning() && _3dMode);
+  await page.waitForFunction(() => !environmentUI.isPhotoPositioning() && !_3dMode);
   const camera = await page.evaluate(() => environmentUI.snapshot().photos[0].camera);
   const pixelTolerance = await page.evaluate(() => 1.1 / renderer.scale);
   assert.ok(Math.abs(camera.x - 6000) < pixelTolerance && Math.abs(camera.y - 5000) < pixelTolerance);
   assert.ok(Math.abs(camera.targetX - 9000) < pixelTolerance && Math.abs(camera.targetY - 8000) < pixelTolerance);
   assert.match(await page.$eval('.env-photo-pose', e => e.textContent), /45°/);
   // A partial replacement must not destroy the existing pose.
+  await page.$eval('#env-photos', e => { e.closest('details').open = true; });
   await page.click('[data-photo-place="0"]');
   await page.mouse.click(posePoints[0].x + 30, posePoints[0].y + 30);
   await page.keyboard.press('Escape');
   assert.deepEqual(await page.evaluate(() => environmentUI.snapshot().photos[0].camera), camera);
-  assert.equal(await page.evaluate(() => _3dMode), true);
+  assert.equal(await page.evaluate(() => _3dMode), false);
   assert.equal(await page.evaluate(() => booths.items.length), 5, 'Photo marking must not place or delete booths');
-  await page.click('#env-method-manual');
+  await page.click(await page.$eval('#env-base-panel', e => e.hidden) ? '#env-step-structure' : '#env-continue');
   await (await page.$('#env-texture')).uploadFile(photo);
   await page.waitForFunction(() => !!environmentUI.snapshot().floorTexture);
   console.log('Photos/material loaded');
   await page.click('#env-plan');
   await page.evaluate(() => booths.selectedIds.add(booths.items[0].id));
-  await page.click('#env-method-marble');
+  await page.click('#env-step-base');
   await page.type('#env-notes', 'Wall');
   assert.equal(await page.evaluate(() => booths.items[0].angle), 0, 'Typing scene notes must not rotate the selected booth');
   await page.evaluate(() => { document.querySelector('#env-notes').value = '层高 4.2 米；柱位按 CAD'; document.querySelector('#env-notes').dispatchEvent(new Event('input')); });
+  await page.click('#env-continue');
+  await page.click('#env-step-export');
+  await page.select('#env-output-size','2560');
   const png = await download(() => page.evaluate(() => export3DPNG()), 'NEEDFLEA_environment.png');
-  const meta = await sharp(png).metadata(); assert.ok(meta.width > 500 && meta.height > 300);
+  const meta = await sharp(png).metadata(); assert.equal(meta.width,2560); assert.equal(meta.height,1440);
   const savedName = `NEEDFLEA_project_${new Date().toISOString().slice(0,10)}.json`;
   const saved = await download(() => page.evaluate(() => saveProject()), savedName);
   const project = JSON.parse(await readFile(saved, 'utf8'));
@@ -144,7 +151,9 @@ try {
   assert.deepEqual(briefData.photos[0].camera, camera);
   await page.click('#env-close');
   await page.screenshot({ path: join(dir, 'scene.png') });
-  await page.click('#btn-3d');
+  await page.click('#btn-environment');
+  await page.click('#env-view-2d');
+  await page.click('#env-close');
   assert.equal(await page.$eval('#canvas', e => e.style.visibility), '');
   await page.reload({ waitUntil: 'networkidle0' });
   await (await page.$('#load-input')).uploadFile(saved);
@@ -153,7 +162,9 @@ try {
   assert.equal(await page.evaluate(() => environmentUI.snapshot().floorTexture !== null), true);
   assert.deepEqual(await page.evaluate(() => environmentUI.snapshot().photos[0].camera), camera);
   await page.click('#btn-environment');
-  await page.waitForFunction(() => _3dMode && !document.querySelector('#btn-3d').disabled);
+  await page.click(await page.$eval('#env-base-panel', e => e.hidden) ? '#env-step-structure' : '#env-continue');
+  await page.waitForFunction(() => _3dMode && !document.querySelector('#btn-environment').disabled);
+  await page.click(await page.$eval('#env-base-panel', e => e.hidden) ? '#env-step-structure' : '#env-continue');
   await page.click('#env-plan');
   await page.screenshot({ path: join(dir, 'environment-panel.png') });
   await page.click('#env-close');

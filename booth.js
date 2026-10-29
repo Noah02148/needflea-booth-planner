@@ -32,7 +32,7 @@ class BoothSystem {
   addBooth(worldX, worldY, cat, size) {
     const [w, h] = this._sizeToWorld(size);
     const item = {
-      id: this.nextId++, type: 'booth',
+      id: this.nextId++, type: 'booth', height: 2.5,
       cat, size,
       wx: worldX - w / 2,  // top-left in world coords
       wy: worldY - h / 2,

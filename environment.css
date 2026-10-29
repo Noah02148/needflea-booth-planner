@@ -15,7 +15,6 @@
 #environment-panel .env-methods [aria-selected="true"] { color: #fff; background: #23805e; border-color: #23805e; }
 .env-methods button:focus-visible { outline: 2px solid #23805e; outline-offset: 3px; }
 .env-method-note { padding: 10px; background: var(--bg3); border-radius: 7px; }
-#env-manual-panel[hidden], #env-marble-panel[hidden] { display: none; }
 .env-data-tools summary { cursor: pointer; font-weight: 600; }
 #environment-panel label { display: block; margin: 8px 0; color: var(--text2); }
 #environment-panel input[type=number], #environment-panel textarea { width: 100%; border: 1px solid var(--border2); border-radius: 5px; padding: 7px; background: var(--bg); color: var(--text); font: inherit; margin-top: 5px; }
@@ -53,21 +52,28 @@
 #topbar::-webkit-scrollbar { display: none; }
 #topbar > * { flex-shrink: 0; }
 #environment-panel [hidden] { display: none !important; }
-.env-marble-section { border: 1px solid #65a590; padding: 14px; border-radius: 9px; background: #4bc98a08; }
-#marble-generate, #marble-apply { background: #23805e !important; color: white !important; }
-#marble-status, #marble-job-status, #marble-render-status { overflow-wrap: anywhere; }
-#marble-history button { display: block; width: 100%; margin: 6px 0; font-size: 10px; }
-#marble-controls { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; }
-.env-marble-section summary { cursor: pointer; margin: 10px 0; }
-#environment-panel input[type=text] { width: 100%; padding: 7px; color: var(--text); background: var(--bg); border: 1px solid var(--border2); border-radius: 5px; }
-#marble-progress { border: 1px solid var(--border); border-radius: 7px; padding: 10px; margin: 10px 0; }
-#marble-activity { display: block; margin-top: 5px; color: var(--text2); font-size: 11px; }
-#marble-steps { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--text3); }
-#marble-steps li::before { content: '○ '; }
-#marble-steps .active { color: #23805e; font-weight: 600; }
-#marble-steps .active::before { content: '● '; }
-#marble-steps .done { color: #23805e; }
-#marble-steps .done::before { content: '✓ '; }
-#marble-steps .failed { color: #b3452c; }
-#marble-progress-log { padding-left: 16px; max-height: 160px; overflow-y: auto; line-height: 1.8; color: var(--text2); }
-#marble-status.marble-error { padding: 10px; border: 1px solid #b3452c60; border-radius: 6px; color: #b3452c; background: #e2755014; }
+#environment-panel input[type=text] { width:100%; padding:7px; color:var(--text); background:var(--bg); border:1px solid var(--border2); border-radius:5px; }
+.env-methods { grid-template-columns:repeat(4,1fr); gap:4px; }
+.env-methods button { padding:8px 3px !important; font-size:11px !important; }
+.env-methods small { display:block; margin-bottom:5px; opacity:.65; }
+.env-view-switch { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding-bottom:14px; border-bottom:1px solid var(--border); }
+.env-view-switch span { width:100%; color:var(--text2); margin-top:4px; }
+#environment-panel [aria-pressed=true] { border-color:#23805e; color:#23805e; }
+.env-source-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+.env-source-grid small { display:block; font-size:10px; margin-top:6px; color:var(--text2); }
+.env-component-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+#environment-panel details { margin-top:14px; }
+#environment-panel summary { cursor:pointer; line-height:1.6; }
+#environment-panel { width:min(375px,calc(100vw - 24px)); }
+@media (max-width:700px) { #environment-panel { width:min(330px,calc(100vw - 24px)); top:110px; } }
+
+.env-methods { position:sticky; top:-20px; z-index:2; background:var(--bg2); padding:10px 0; }
+#environment-panel [data-env-add] { min-width:82px; white-space:nowrap; }
+
+.env-methods { grid-template-columns:repeat(3,1fr); }
+.env-context { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:12px; padding:10px; background:var(--bg3); border-radius:7px; color:var(--text2); }
+.env-context button { white-space:nowrap; }
+#env-continue { width:100%; background:#23805e !important; color:#fff !important; }
+.env-save-note { border-top:1px solid var(--border); padding-top:12px; font-size:11px; }
+
+.env-methods { grid-template-columns:repeat(2,1fr); }

@@ -130,6 +130,7 @@ function render() {
   // Draw eraser marks (cover CAD base layer) — before annotations so booths/
   // arrows/text added afterwards display on top of erased areas
   _drawEraserMarks();
+  window.environmentUI?.drawPlan(ctx, renderer);
   // While cropping the 区域图, preview the merged zone regions so the user
   // selects over exactly what will be exported.
   if (tool === 'crop' && cropMode === 'zone') booths.drawZonePlan(ctx, renderer);
@@ -1272,6 +1273,7 @@ function onDXFParsed(dxfData) {
     alert('文件解析完成，但未找到任何图形实体。\n请确认文件包含有效的 CAD 图形数据。');
     return;
   }
+  window.environmentUI?.clearMeasuredBase();
   renderer.load(dxfData);
   _setupDxfLayerState(dxfData);
   dxfLoaded = true;
@@ -1295,6 +1297,7 @@ function _clearAnnotationsIfNeeded() {
 }
 
 function onSvgLoaded() {
+  window.environmentUI?.clearMeasuredBase();
   dxfLoaded = true;
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('btn-calib').disabled = false;
@@ -1441,6 +1444,7 @@ function loadImageFile(file) {
 
     const img = new Image();
     img.onload = () => {
+      window.environmentUI?.clearMeasuredBase();
       renderer.loadImageBackground(img);
       dxfLoaded = true;
       metersPerUnit = null;
@@ -1520,6 +1524,7 @@ function updateScaleInfo() {
     el.textContent = `比例尺 1m = ${unitsPerM.toFixed(1)} 单位`;
     el.style.color = '#4BC98A';
   }
+  window.environmentUI?.syncStatus();
 }
 
 // ── TOOL MANAGEMENT ──────────────────────────────────────────────────────────
@@ -1592,6 +1597,37 @@ function metersToDXF(m) {
 }
 
 // ── MOUSE EVENTS ─────────────────────────────────────────────────────────────
+// Both 2D and 3D use the same presets, scale, snapping and overlap handling.
+function placeLayoutItem(wx, wy) {
+  if (tool === 'booth') {
+    const size = currentBoothSize();
+    const [mw, mh] = size.split('x').map(Number);
+    const ww = metersToDXF(mw), wh = metersToDXF(mh);
+    const item = booths.addBooth(wx, wy, activeCat, size);
+    item.boothStyle = activeBoothStyle;
+    item.ww = ww; item.wh = wh;
+    item.wx = wx - ww / 2; item.wy = wy - wh / 2;
+    // Snap to nearby booths on placement
+    _snapBooth(item);
+    // If still overlapping after snap, push to nearest non-overlapping position
+    _resolveOverlap(item);
+    item._snapGuides = null;
+    return true;
+  }
+
+  if (tool === 'guard') {
+    booths.addGuard(wx, wy);
+    return true;
+  }
+
+  if (tool === 'fire') {
+    booths.addFire(wx, wy);
+    return true;
+  }
+
+  return false;
+}
+
 canvas.addEventListener('mousedown', e => {
   if (_3dMode) return; // 3D mode handles its own events
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
@@ -1700,34 +1736,7 @@ canvas.addEventListener('mousedown', e => {
     return;
   }
 
-  if (tool === 'booth') {
-    const size = currentBoothSize();
-    const [mw, mh] = size.split('x').map(Number);
-    const ww = metersToDXF(mw), wh = metersToDXF(mh);
-    const item = booths.addBooth(wx, wy, activeCat, size);
-    item.boothStyle = activeBoothStyle;
-    item.ww = ww; item.wh = wh;
-    item.wx = wx - ww / 2; item.wy = wy - wh / 2;
-    // Snap to nearby booths on placement
-    _snapBooth(item);
-    // If still overlapping after snap, push to nearest non-overlapping position
-    _resolveOverlap(item);
-    item._snapGuides = null;
-    render();
-    return;
-  }
-
-  if (tool === 'guard') {
-    booths.addGuard(wx, wy);
-    render();
-    return;
-  }
-
-  if (tool === 'fire') {
-    booths.addFire(wx, wy);
-    render();
-    return;
-  }
+  if (placeLayoutItem(wx, wy)) { render(); return; }
 
   if (tool === 'measure') {
     if (!measureState || measureState.p2) {
@@ -2054,6 +2063,7 @@ canvas.addEventListener('contextmenu', e => {
   e.preventDefault();
   if (window.environmentUI?.isPhotoPositioning()) { window.environmentUI.cancelPhotoPlacement(); return; }
   const { wx, wy } = screenToWorld(e.offsetX, e.offsetY);
+  if (window.environmentUI?.deleteAt(wx, wy)) return;
   const hit = booths.hitTest(wx, wy, renderer.scale);
   if (hit) {
     if (confirm(`删除此${hit.type === 'booth' ? '帐篷' : hit.type === 'guard' ? '安保点' : hit.type === 'fire' ? '灭火器' : hit.type === 'arrow' ? '动线' : hit.type === 'zone' ? '功能区' : hit.type}？`)) {
@@ -2281,6 +2291,7 @@ function showProps(item) {
       <div class="prop-row" id="tent-corner-row-${item.id}" style="display:${isCompositeStyle ? 'flex' : 'none'}"><label>${frameLabel}</label>
         <select onchange="setTentCorner(${item.id},this.value)">${cornerOpts}</select>
       </div>
+      <div class="prop-row"><label>结构总高</label><span>2.5 m（空地不生成结构）</span></div>
       <div class="prop-row"><label>摊位大小</label>
         <select onchange="updateItem(${item.id},'sizeClass',this.value)">${sizeClassOpts}</select>
       </div>
@@ -2814,6 +2825,7 @@ async function applyProjectData(data) {
   let inferredMetersPerUnit = null;
   // Validate the optional environment before changing the current project.
   const loadedEnvironment = window.environmentUI?.validate(data.environment);
+  if (loadedEnvironment?.sitePlan && !data.cadFile?.base64 && data.metersPerUnit !== 1) throw new Error('实测场地必须使用米制比例尺');
   if (_3dMode && window.environmentUI) window.environmentUI.close();
 
   document.getElementById('tool-hint').textContent = '正在载入项目…';
@@ -2919,12 +2931,13 @@ async function applyProjectData(data) {
   }
   // Restore annotations
   window.environmentUI?.restore(loadedEnvironment);
-  booths.items = data.items || [];
+  booths.items = (data.items || []).map(item => item.type === 'booth' ? { ...item, height: 2.5 } : item);
   booths.nextId = data.nextId || (booths.items.length ? Math.max(...booths.items.map(i => i.id)) + 1 : 1);
   booths.selectedId = null;
   booths.selectedIds = new Set();
   eraserMarks = data.eraserMarks || [];
   metersPerUnit = typeof data.metersPerUnit === 'number' && Number.isFinite(data.metersPerUnit) && data.metersPerUnit > 0 ? data.metersPerUnit : inferredMetersPerUnit;
+  window.environmentUI?.restoreMeasuredBase(!data.viewport);
   updateScaleInfo();
   if (typeof data.darkMode === 'boolean' && data.darkMode !== darkMode) toggleTheme();
 
@@ -3248,7 +3261,7 @@ window.setAllLayersVisible = setAllLayersVisible;
 // ── 3D ISOMETRIC VIEW ───────────────────────────────────────────────────────
 window.toggle3DView = function() {
   _3dMode = !_3dMode;
-  const btn = document.getElementById('btn-3d');
+  const btn = document.getElementById('btn-environment');
   if (_3dMode) {
     btn.style.background = 'var(--green)';
     btn.style.color = '#fff';
