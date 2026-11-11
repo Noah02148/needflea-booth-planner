@@ -986,6 +986,7 @@ async function parseDWGtoSVG(arrayBuffer) {
   console.log(`DWG layers with entities: ${Object.keys(_dwgEntitiesByLayer).length}`);
 
   // Generate SVG from all visible layers
+  _dxfFullData = null;
   const svgString = generateSVGFromLayers();
 
   // Populate the layer panel
@@ -1243,6 +1244,8 @@ function getFileExtension(name) {
 }
 
 function _setupDxfLayerState(dxfData) {
+  _dwgBounds = null;
+  _dwgBlockDefs = {};
   const dxfLayers = dxfData.layers || {};
   _dwgLayerColors = {};
   _dwgLayerVisibility = {};
@@ -2628,6 +2631,7 @@ function _venueLayers() {
 function _venueEntities() {
   const r2 = n => Math.round(n * 100) / 100;
   const dxfColor = e => {
+    if (/^#[0-9a-f]{6}$/i.test(e.colorHex || '')) return e.colorHex;
     const aci = (e.color !== null && e.color !== undefined && e.color !== 256)
       ? Math.abs(e.color) : Math.abs(_dwgLayerColors[e.layer || '0'] || 7);
     return _svgAciColors[aci] || '#FFFFFF';
@@ -2787,6 +2791,78 @@ function _buildVenueExport() {
   };
 }
 
+// Keep the parsed base map even when venue export is omitted by the site library.
+// Original DWG bytes remain available, but reopening a backup needs no converter.
+function _portableCadFile() {
+  if (!_cadFileData || !/\.dwg$/i.test(_cadFileData.name)) return _cadFileData;
+  const renderData = _dxfFullData
+    ? { schema: 'needflea-cad-render/1', dxf: _dxfFullData }
+    : _dwgBounds && !_dwgRasterMode
+      ? { schema: 'needflea-cad-render/1', bounds: _dwgBounds, entitiesByLayer: _dwgEntitiesByLayer, colors: _dwgLayerColors, visibility: _dwgLayerVisibility }
+      : null;
+  if (!renderData) throw new Error('底图尚未解析完成，请完成导入后再保存项目。');
+  return { ..._cadFileData, renderData };
+}
+
+function _venueAsDxf(venue) {
+  if (venue?.schema !== 'needflea-venue/1' || !Array.isArray(venue.entities) || !venue.entities.length) return null;
+  const b = venue.bounds;
+  if (!b || !['minX', 'minY', 'maxX', 'maxY'].every(k => Number.isFinite(b[k])) || b.maxX <= b.minX || b.maxY <= b.minY) return null;
+  const entities = venue.entities.map(e => {
+    const common = { layer: e.layer || '0', colorHex: e.color, lineType: e.lineType, sourceLayers: e.sourceLayers };
+    switch (e.type) {
+      case 'line': return { ...common, type: 'LINE', x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2 };
+      case 'polyline': return { ...common, type: 'LWPOLYLINE', closed: e.closed, vertices: e.points.map(([x, y]) => ({ x, y })) };
+      case 'circle': return { ...common, type: 'CIRCLE', cx: e.cx, cy: e.cy, r: e.r };
+      case 'arc': return { ...common, type: 'ARC', cx: e.cx, cy: e.cy, r: e.r, startAngle: e.startAngle, endAngle: e.endAngle };
+      case 'text': return { ...e, ...common, type: 'TEXT' };
+      default: return null;
+    }
+  }).filter(Boolean);
+  return { entities, layers: Object.fromEntries((venue.layers || []).map(l => [l.name, { color: 7, colorHex: l.color, visible: l.visible !== false }])), bounds: { ...b, width: b.maxX - b.minX, height: b.maxY - b.minY } };
+}
+
+function portableProject(data) {
+  const result = structuredClone(data);
+  const cad = result.cadFile;
+  if (!cad || !/\.dwg$/i.test(cad.name)) return result;
+  if (cad.renderData?.schema === 'needflea-cad-render/1') return result;
+  const dxf = _venueAsDxf(result.venue);
+  if (dxf) cad.renderData = { schema: 'needflea-cad-render/1', dxf };
+  else if (cad.base64 === _cadFileData?.base64) result.cadFile = structuredClone(_portableCadFile());
+  else throw new Error('这个旧场地尚未保存解析底图，请先载入并保存，再导出 JSON。');
+  return result;
+}
+
+async function _restorePortableCad(cadFile, venue) {
+  const saved = cadFile.renderData;
+  const portable = saved?.schema === 'needflea-cad-render/1';
+  const dxf = portable ? saved.dxf : _venueAsDxf(venue);
+  if (dxf) {
+    renderer.load(dxf);
+    _dwgBounds = null; _dwgBlockDefs = {};
+    _setupDxfLayerState(dxf);
+    return true;
+  }
+  if (saved?.schema !== 'needflea-cad-render/1' || !saved.bounds || !saved.entitiesByLayer) return false;
+  _dxfFullData = null; _dwgRasterMode = false; _dwgBlockDefs = {};
+  _dwgBounds = saved.bounds;
+  _dwgEntitiesByLayer = saved.entitiesByLayer;
+  _dwgLayerColors = saved.colors || {};
+  _dwgLayerVisibility = { ...saved.visibility };
+  const url = URL.createObjectURL(new Blob([generateSVGFromLayers()], { type: 'image/svg+xml;charset=utf-8' }));
+  try {
+    await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => { renderer.loadSvgBackground(img, saved.bounds); resolve(); };
+      img.onerror = () => reject(new Error('项目内嵌底图读取失败'));
+      img.src = url;
+    });
+  } finally { URL.revokeObjectURL(url); }
+  populateLayerPanel();
+  return true;
+}
+
 function captureProject(includeVenue = true) {
   let venue = null;
   try { if (includeVenue) venue = _buildVenueExport(); }
@@ -2795,7 +2871,7 @@ function captureProject(includeVenue = true) {
     version: 3,
     site: _siteInfo ? { ..._siteInfo } : undefined,
     environment: window.environmentUI ? window.environmentUI.snapshot() : undefined,
-    cadFile: _cadFileData,
+    cadFile: _portableCadFile(),
     categories: booths.CAT_COLORS,
     items: booths.items,
     nextId: booths.nextId,
@@ -2810,7 +2886,9 @@ function captureProject(includeVenue = true) {
 }
 
 function saveProject() {
-  const json = JSON.stringify(captureProject());
+  let json;
+  try { json = JSON.stringify(captureProject()); }
+  catch (err) { alert('项目未保存：' + err.message); return; }
   const blob = new Blob([json], { type: 'application/json' });
   const link = document.createElement('a');
   link.download = `NEEDFLEA_project_${new Date().toISOString().slice(0,10)}.json`;
@@ -2858,7 +2936,12 @@ async function applyProjectData(data) {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const ext = (data.cadFile.name || '').split('.').pop().toLowerCase();
 
-    if (ext === 'dwg') {
+    if (ext === 'dwg' && await _restorePortableCad(data.cadFile, data.venue)) {
+      dxfLoaded = true;
+      inferredMetersPerUnit = data.venue?.metersPerUnit || null;
+      document.getElementById('welcome').classList.add('hidden');
+      document.getElementById('btn-calib').disabled = false;
+    } else if (ext === 'dwg') {
       // Parse DWG: try libdxfrw first, then ODA fallback
       const ab = bytes.buffer;
       let dwgLoaded = false;
@@ -2971,6 +3054,7 @@ async function loadProject(input) {
 }
 window.projectIO = {
   capture: captureProject,
+  portable: portableProject,
   load: applyProjectData,
   setSite(info) { _siteInfo = info ? { name: String(info.name || '').slice(0, 100), eventName: String(info.eventName || '').slice(0, 200) } : null; },
 };

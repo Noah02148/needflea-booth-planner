@@ -198,7 +198,9 @@ class DXFRenderer {
 
   _getEntityColor(entity) {
     let color;
-    if (entity.color !== null && entity.color !== undefined && entity.color !== 256) {
+    if (/^#[0-9a-f]{6}$/i.test(entity.colorHex || '')) {
+      color = entity.colorHex;
+    } else if (entity.color !== null && entity.color !== undefined && entity.color !== 256) {
       color = this.aciColors[entity.color] || '#333333';
     } else if (entity.layer && this.dxfData.layers[entity.layer]) {
       const lc = this.dxfData.layers[entity.layer].color;

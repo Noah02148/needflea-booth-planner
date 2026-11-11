@@ -95,5 +95,29 @@ try{
   assert.match(await migrationPage.$eval('#site-message',e=>e.textContent),/升级或打开失败/);
   const retained=await migrationPage.evaluate(()=>new Promise(resolve=>{const r=indexedDB.open('needflea-site-library',1);r.onsuccess=()=>{const db=r.result,tx=db.transaction('projects'),q=tx.objectStore('projects').get('old');tx.oncomplete=()=>{const result={version:db.version,project:q.result.project};db.close();resolve(result);};};}));
   assert.equal(retained.version,1);assert.deepEqual(retained.project,project);await context.close();
-  assert.deepEqual(errors,[]);console.log('PASS: v1 migration; independent per-venue activities; JSON/base import; scoped update; refresh/load; unsaved cancel; duplicate guard; failed import/storage rollback; full backup; CAD venue creation; mobile layout. Artifacts:',dir);
+  // A venue created directly from DWG must store parsed CAD, not just the input.
+  await page.setViewport({width:1440,height:1100});
+  const dwgFile=join(dir,'portable.dwg');await writeFile(dwgFile,'AC1032 mock DWG');
+  await page.evaluate(dxf=>{
+    parseDWGtoSVG=async()=>{throw new Error('Simulated unsupported DWG');};
+    convertDWGtoDXF=async()=>dxf;
+  },dxf);
+  await page.$eval('#site-create-details',e=>e.open=true);
+  await page.$eval('#site-name',e=>e.value='DWG 便携场地');await page.$eval('#site-event',e=>e.value='活动备份');
+  await(await page.$('#site-file')).uploadFile(dwgFile);await page.click('#site-create');await idle();
+  const dwgSite=(await dbGet('sites')).find(s=>s.name==='DWG 便携场地');assert.ok(dwgSite);
+  const dwgBase=(await dbGet('projects',dwgSite.id)).project;
+  assert.equal(dwgBase.cadFile.renderData.schema,'needflea-cad-render/1');
+  const dwgActivity=(await dbGet('activities')).find(a=>a.siteId===dwgSite.id);
+  assert.equal((await dbGet('activityProjects',dwgActivity.id)).project.cadFile.renderData.schema,'needflea-cad-render/1');
+  await page.click(`[data-activity-export="${dwgActivity.id}"]`);await idle();
+  const portableFilename=join(dir,'DWG 便携场地_活动备份.json');let portable;
+  for(let i=0;i<50;i++){try{portable=JSON.parse(await readFile(portableFilename,'utf8'));break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  assert.ok(portable);
+  await page.evaluate(async portable=>{
+    convertDWGtoDXF=async()=>{throw new Error('No DWG server');};
+    await projectIO.load(portable);
+  },portable);
+  assert.equal(await page.evaluate(()=>renderer.dxfData.entities.length),4,'Exported activity reopens without DWG parsing/conversion');
+  assert.deepEqual(errors,[]);console.log('PASS: v1 migration; independent per-venue activities; JSON/base import; scoped update; refresh/load; unsaved cancel; duplicate guard; failed import/storage rollback; full backup; CAD venue creation; mobile layout; portable DWG venue/activity creation and export. Artifacts:',dir);
 }finally{await browser.close();}

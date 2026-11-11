@@ -137,7 +137,7 @@
     return validateProject({ version: 3, cadFile: { name: file.name, base64: btoa(binary) }, items: [], nextId: 1, metersPerUnit: scale });
   }
   function exportProject(project, name) {
-    const url = URL.createObjectURL(new Blob([JSON.stringify(project)], { type: 'application/json' }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(window.projectIO.portable(project))], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = `${name.replace(/[\\/:*?"<>|]/g, '_')}.json`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -159,7 +159,7 @@
   async function changeAndSave(project, save, siteId, activityId) {
     const previous = snapshot(), binding = [activeSiteId, activeActivityId, baseline];
     await loadSafely(project);
-    try { await save(); }
+    try { project.cadFile = window.projectIO.capture(false).cadFile; await save(); }
     catch (err) { try { await window.projectIO.load(previous); } catch {} [activeSiteId, activeActivityId, baseline] = binding; renderCurrent(); throw err; }
     activeSiteId = siteId; activeActivityId = activityId; selectedSiteId = siteId; baseline = fingerprint(snapshot());
     await refreshList();
@@ -245,6 +245,7 @@
       const activityId = firstName ? crypto.randomUUID() : null;
       const project = activityId ? activityProject(raw, site, names(firstName, 200, '活动名称')) : base;
       await changeAndSave(project, () => transaction(['sites','projects','activities','activityProjects'], 'readwrite', tx => {
+        base.cadFile = project.cadFile;
         tx.objectStore('sites').put(site); tx.objectStore('projects').put({ id, project: base });
         if (activityId) { tx.objectStore('activities').put({ id: activityId, siteId: id, name: firstName, createdAt: now, updatedAt: now, itemCount: raw.items.length }); tx.objectStore('activityProjects').put({ id: activityId, project }); }
       }), id, activityId);

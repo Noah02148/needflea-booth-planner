@@ -79,6 +79,7 @@ node dwg-server.mjs
 - 摊位位置/尺寸使用 `wx`、`wy`、`ww`、`wh`，旋转 `angle` 为绕中心的角度。修改几何时对照 `BoothSystem` 的实现，保持命中检测、吸附、2D、等轴测和导出一致。
 - 颜色优先通过 `booths.catColor(cat)` 读取，保留未知分类的兜底，避免载入不同分类的项目后崩溃。
 - 保存格式为 `version: 3`，含 `cadFile`、`categories`、`items`、比例尺、视口、图层及 `venue`；保持现有项目的载入兼容。
+- DWG 项目通过 `cadFile.renderData`（`needflea-cad-render/1`）保存原精度解析底图，场地库 `capture(false)` 也必须携带；载入优先用解析底图，旧 v3 可由 `venue` 恢复，均不得请求 DWG 服务。仅无解析底图的旧项目回退原始 DWG 路径。运行 `node scripts/check-portable-project.mjs` 验证，个人 JSON 样本不入库。
 - 可选 `site: {name,eventName}` 为可移植场地名称 / 活动备注。浏览器内部记录 ID 不随项目导出，外部 JSON 载入不能静默绑定或覆盖已有场地。切换仅显式载入、更新仅显式保存；有未保存改动先提示。无底图 / 比例尺的旧项目必须清除前一场地的背景和单位；加载或存储失败恢复原画布，不留半条场地记录。
 - 场地库 v1 升级至 v2 在升级事务中复制旧完整布局为首个活动，并另建空摊位的场地基础；失败必须回滚旧库。活动更新不能改变其他活动或场地基础，基础更新不能覆盖已有活动。活动名称仅在同一场地内去重。活动导入无底图 JSON 时继承明确选中的场地基础，此规则只适用于活动创建，不改变通用项目载入的清理规则。活动导出须自包含 CAD / 环境 / 布局；场地基础导出不声称包含全部活动。
 - `venue.schema` 为 `needflea-venue/1`，携带归一化几何、图层、边界及 SVG 快照。图片场景中 `venue` 为 `null`，底图由带 `isImage` 的 `cadFile` 保存。
