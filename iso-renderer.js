@@ -164,6 +164,8 @@ class IsoRenderer {
     items3d.forEach(item => {
       if (item.style === 'table') {
         this._drawTableBooth(ctx, item, boothSystem, isDark);
+      } else if (item.style === 'roofed') {
+        this._drawRoofed(ctx, item, boothSystem, isDark);
       } else if (item.style === 'canopy') {
         this._drawCanopy(ctx, item, boothSystem, isDark);
       } else if (item.style === 'tent-yard' || item.style === 'canopy-yard') {
@@ -176,7 +178,7 @@ class IsoRenderer {
     // Draw all labels on top of all structures
     items3d.forEach(item => {
       const col = this._getColor(item, boothSystem);
-      const labelH = item.style === 'table' ? 0.5
+      const labelH = item.style === 'table' ? 0.5 : item.style === 'roofed' ? this.TENT_WALL_H + .8
                    : (item.style === 'canopy' || item.style === 'canopy-yard') ? (this.TENT_WALL_H + 0.3)
                    : (this.TENT_WALL_H + 0.4);
       this._drawBoothLabel(ctx, item, col, isDark, labelH);
@@ -212,7 +214,7 @@ class IsoRenderer {
       const hw = item.mw / 2, hh = item.mh / 2;
       [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]].forEach(([dx,dy]) => {
         expand(item.mx + dx, item.my + dy, 0);
-        expand(item.mx + dx, item.my + dy, this.TENT_WALL_H);
+        expand(item.mx + dx, item.my + dy, this.TENT_WALL_H + (item.style === 'roofed' ? .5 : 0));
       });
     });
 
@@ -377,7 +379,7 @@ class IsoRenderer {
   }
 
   // Composite: 空地 across the whole footprint + a fixed 2×2m booth
-  // (盘扣架 or 四角帐篷) pinned to one corner.
+  // (盘扣架 or 无顶帐篷) pinned to one corner.
   _drawComposite(ctx, item, boothSystem, isDark) {
     // Ground/空地 covers the full footprint.
     this._drawTableBooth(ctx, item, boothSystem, isDark);
@@ -409,10 +411,9 @@ class IsoRenderer {
     const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
     const at = (dx, dy, z) => this.toScreen(item.mx + dx, item.my + dy, z);
 
-    // Heights for horizontal crossbars (bottom + top only)
-    const zGround = 0;
-    const zBot = 0.15;   // bottom crossbar
-    const zTop = H;      // top frame
+    // Ledger levels follow the supplied open-front ringlock reference.
+    const zMid = H - 0.78; // rear and side ledgers, entry stays open
+    const zTop = H - 0.18; // short exposed post above the upper rosette
 
     // Collect all pipe segments: [from, to] as screen points
     // We'll sort by depth and draw back-to-front
@@ -429,13 +430,14 @@ class IsoRenderer {
     };
 
     // 4 vertical poles
-    corners.forEach(([dx,dy]) => addPipe(dx,dy,zGround, dx,dy,zTop));
+    corners.forEach(([dx,dy]) => addPipe(dx,dy,0.014, dx,dy,H));
 
-    // Horizontal bars at bottom and top
-    [zBot, zTop].forEach(z => {
+    // Upper perimeter plus three lower ledgers; no low front/ground rails.
+    [zMid, zTop].forEach(z => {
       for (let i = 0; i < 4; i++) {
         const [x1,y1] = corners[i];
         const [x2,y2] = corners[(i+1)%4];
+        if (z === zMid && y1 === -hh && y2 === -hh) continue;
         addPipe(x1,y1,z, x2,y2,z);
       }
     });
@@ -444,9 +446,9 @@ class IsoRenderer {
     pipes.sort((a,b) => (a.depth - b.depth) || (a.z - b.z));
 
     // Pipe rendering style
-    const pipeW = Math.max(2.5, 0.04 * this.isoScale); // pipe thickness in pixels
-    const pipeColor = isDark ? '#a0a0a0' : '#777777';
-    const pipeHighlight = isDark ? '#c8c8c8' : '#999999';
+    const pipeW = Math.max(2.5, 0.048 * this.isoScale); // pipe thickness in pixels
+    const pipeColor = isDark ? '#c5cdd1' : '#a4afb6';
+    const pipeHighlight = '#f0f3f5';
     const pipeShadow = isDark ? '#686868' : '#555555';
 
     pipes.forEach(pipe => {
@@ -482,9 +484,15 @@ class IsoRenderer {
       ctx.restore();
     });
 
-    // Joint dots at corners (pipe joints)
+    // Round foot plates and rosettes mirror the parametric 3D frame.
+    corners.forEach(([dx,dy]) => {
+      const p=at(dx,dy,0.006), r=Math.max(3,.085*this.isoScale);
+      ctx.beginPath(); ctx.ellipse(p.x,p.y,r,r*.45,0,0,Math.PI*2);
+      ctx.fillStyle=pipeColor; ctx.fill(); ctx.strokeStyle=pipeShadow; ctx.lineWidth=1; ctx.stroke();
+    });
+    // Joint discs at collars and ledger connections
     const jointR = pipeW * 0.8;
-    [zGround, zBot, zTop].forEach(z => {
+    [.06, zMid, zTop].forEach(z => {
       corners.forEach(([dx,dy]) => {
         const p = at(dx, dy, z);
         ctx.beginPath();
@@ -500,109 +508,52 @@ class IsoRenderer {
 
   }
 
-  _drawCanopy(ctx, item, boothSystem, isDark) {
-    const col = this._getColor(item, boothSystem);
-    const hw = item.mw / 2, hh = item.mh / 2;
-    const H = this.TENT_WALL_H - 0.5; // 2.5m overall, including roof
-    const peakH = this.TENT_WALL_H;           // slight center peak
-
-    const at = (dx, dy, z) => this.toScreen(item.mx + dx, item.my + dy, z);
-
-    // Corner positions
-    const corners = [[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
-
-    // Sort corners by depth for correct draw order
-    const cos = Math.cos(this.rotation), sin = Math.sin(this.rotation);
-    const cornersSorted = corners.map(([dx,dy], i) => ({
-      dx, dy, i,
-      depth: (item.mx+dx)*sin + (item.my+dy)*cos
-    })).sort((a,b) => a.depth - b.depth);
-
-    // --- Draw legs (thin poles) ---
-    const legW = Math.max(1.8, 0.025 * this.isoScale);
-    const legColor = isDark ? '#b0b0a0' : '#888878';
-    const legShadow = isDark ? '#787870' : '#606058';
-    const legHighlight = isDark ? '#d0d0c0' : '#aaa898';
-
-    cornersSorted.forEach(({dx, dy}) => {
-      const pBot = at(dx, dy, 0);
-      const pTop = at(dx, dy, H);
-      ctx.save();
-      ctx.lineCap = 'round';
-      // Shadow
-      ctx.strokeStyle = legShadow;
-      ctx.lineWidth = legW + 1;
-      ctx.beginPath(); ctx.moveTo(pBot.x, pBot.y); ctx.lineTo(pTop.x, pTop.y); ctx.stroke();
-      // Main
-      ctx.strokeStyle = legColor;
-      ctx.lineWidth = legW;
-      ctx.beginPath(); ctx.moveTo(pBot.x, pBot.y); ctx.lineTo(pTop.x, pTop.y); ctx.stroke();
-      // Highlight
-      const dx2 = pTop.x - pBot.x, dy2 = pTop.y - pBot.y;
-      const len = Math.hypot(dx2, dy2);
-      if (len > 1) {
-        const nx = -dy2/len * legW * 0.25, ny = dx2/len * legW * 0.25;
-        ctx.strokeStyle = legHighlight;
-        ctx.lineWidth = legW * 0.35;
-        ctx.beginPath(); ctx.moveTo(pBot.x+nx, pBot.y+ny); ctx.lineTo(pTop.x+nx, pTop.y+ny); ctx.stroke();
+  _drawCanopy(ctx, item, boothSystem, isDark, height=this.TENT_WALL_H, trussDepth=.41) {
+    const hw=item.mw/2, hh=item.mh/2;
+    const upper=height-.04, lower=upper-trussDepth;
+    const corners=[[-hw,-hh],[hw,-hh],[hw,hh],[-hw,hh]];
+    const at=(x,y,z)=>this.toScreen(item.mx+x,item.my+y,z);
+    const segments=[];
+    const add=(a,b,width) => {
+      const depth=p=>(item.mx+p[0])*Math.sin(this.rotation)+(item.my+p[1])*Math.cos(this.rotation);
+      segments.push({a:at(...a),b:at(...b),depth:(depth(a)+depth(b))/2,width});
+    };
+    for(const [x,y] of corners) {add([x,y,.012],[x,y,1.3],.032);add([x,y,1.2],[x,y,height],.044);}
+    const truss=(a,b) => {
+      for(let i=0;i<2;i++) {
+        const t=i/2,u=(i+1)/2,x1=a[0]+(b[0]-a[0])*t,y1=a[1]+(b[1]-a[1])*t,x2=a[0]+(b[0]-a[0])*u,y2=a[1]+(b[1]-a[1])*u;
+        add([x1,y1,lower],[x2,y2,upper],.022);add([x1,y1,upper],[x2,y2,lower],.022);
       }
-      ctx.restore();
-    });
-
-    // --- Draw roof canopy ---
-    // Roof is composed of 4 triangular panels from each edge to center peak
-    const peak = at(0, 0, peakH);
-    const roofCorners = corners.map(([dx,dy]) => at(dx, dy, H));
-
-    // Build 4 triangular roof faces and sort by depth
-    const faces = [];
-    for (let i = 0; i < 4; i++) {
-      const c1 = corners[i], c2 = corners[(i+1)%4];
-      const midDepth = ((item.mx+c1[0])*sin + (item.my+c1[1])*cos +
-                        (item.mx+c2[0])*sin + (item.my+c2[1])*cos +
-                        item.mx*sin + item.my*cos) / 3;
-      faces.push({ i, c1, c2, depth: midDepth });
+    };
+    for(let i=0;i<4;i++) truss(corners[i],corners[(i+1)%4]);
+    truss([-hw,0],[hw,0]);truss([0,-hh],[0,hh]);
+    segments.sort((a,b)=>a.depth-b.depth);
+    ctx.save();ctx.lineCap='square';
+    for(const line of segments) {
+      ctx.lineWidth=Math.max(2,line.width*this.isoScale)+1.2;ctx.strokeStyle=isDark?'#68767f':'#68747b';
+      ctx.beginPath();ctx.moveTo(line.a.x,line.a.y);ctx.lineTo(line.b.x,line.b.y);ctx.stroke();
+      ctx.lineWidth=Math.max(1,line.width*this.isoScale);ctx.strokeStyle='#e5e9eb';ctx.stroke();
     }
-    faces.sort((a,b) => a.depth - b.depth);
+    for(const [x,y] of corners) {
+      for(const z of [.72,lower,upper]) {const p=at(x,y,z);ctx.fillStyle='#edf0f1';ctx.strokeStyle='#637078';ctx.lineWidth=1;ctx.fillRect(p.x-3,p.y-3,6,6);ctx.strokeRect(p.x-3,p.y-3,6,6);}
+      const p=at(x,y,.006),r=Math.max(2,.052*this.isoScale);ctx.beginPath();ctx.ellipse(p.x,p.y,r,r*.45,0,0,Math.PI*2);ctx.fillStyle='#b5bdc1';ctx.fill();ctx.stroke();
+    }
+    ctx.restore();
+  }
 
-    // Canvas color for roof fabric
-    const roofFill = isDark ? 'rgba(220,215,200,0.55)' : 'rgba(245,240,225,0.65)';
-    const roofStroke = isDark ? 'rgba(180,175,160,0.7)' : 'rgba(200,195,180,0.8)';
-    const roofEdge = isDark ? 'rgba(160,155,140,0.5)' : 'rgba(180,175,160,0.6)';
-
-    faces.forEach(({c1, c2}) => {
-      const p1 = at(c1[0], c1[1], H);
-      const p2 = at(c2[0], c2[1], H);
-      ctx.beginPath();
-      ctx.moveTo(p1.x, p1.y);
-      ctx.lineTo(p2.x, p2.y);
-      ctx.lineTo(peak.x, peak.y);
-      ctx.closePath();
-      ctx.fillStyle = roofFill;
-      ctx.fill();
-      ctx.strokeStyle = roofEdge;
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-    });
-
-    // Roof edge outline (bottom rim of the canopy)
-    ctx.beginPath();
-    roofCorners.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
-    ctx.closePath();
-    ctx.strokeStyle = roofStroke;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Cross support lines under roof (X-brace)
-    ctx.strokeStyle = isDark ? 'rgba(180,175,160,0.35)' : 'rgba(160,155,140,0.3)';
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    ctx.moveTo(roofCorners[0].x, roofCorners[0].y);
-    ctx.lineTo(roofCorners[2].x, roofCorners[2].y);
-    ctx.moveTo(roofCorners[1].x, roofCorners[1].y);
-    ctx.lineTo(roofCorners[3].x, roofCorners[3].y);
-    ctx.stroke();
-
+  _drawRoofed(ctx, item, boothSystem, isDark) {
+    const frameHeight=this.TENT_WALL_H,height=frameHeight+.5,bottom=frameHeight-.06,eave=bottom+.15;
+    this._drawCanopy(ctx,item,boothSystem,isDark);
+    const corners=[[-item.mw/2,-item.mh/2],[item.mw/2,-item.mh/2],[item.mw/2,item.mh/2],[-item.mw/2,item.mh/2]];
+    const at=(p,z)=>this.toScreen(item.mx+p[0],item.my+p[1],z),peak=at([0,0],height);
+    const faces=corners.map((a,i)=>({a,b:corners[(i+1)%4],depth:(item.mx+a[0]/2+corners[(i+1)%4][0]/2)*Math.sin(this.rotation)+(item.my+a[1]/2+corners[(i+1)%4][1]/2)*Math.cos(this.rotation)})).sort((a,b)=>a.depth-b.depth);
+    ctx.save();ctx.lineWidth=.8;ctx.strokeStyle='#b6bec1';
+    for(const {a,b} of faces) {
+      const p=at(a,eave),q=at(b,eave),r=at(b,bottom),s=at(a,bottom);
+      ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.lineTo(r.x,r.y);ctx.lineTo(s.x,s.y);ctx.closePath();ctx.fillStyle=isDark?'#d4dadd':'#e8ebea';ctx.fill();ctx.stroke();
+      ctx.beginPath();ctx.moveTo(peak.x,peak.y);ctx.quadraticCurveTo((peak.x+p.x)/2,(peak.y+p.y)/2+3,p.x,p.y);ctx.lineTo(q.x,q.y);ctx.quadraticCurveTo((peak.x+q.x)/2,(peak.y+q.y)/2+3,peak.x,peak.y);ctx.closePath();ctx.fillStyle=isDark?'#e3e8e9':'#fafbf8';ctx.fill();ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _drawTableBooth(ctx, item, boothSystem, isDark) {

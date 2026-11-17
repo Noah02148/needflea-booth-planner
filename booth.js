@@ -392,9 +392,9 @@ class BoothSystem {
             ctx.stroke();
           }
           ctx.restore();
-        } else if (baseStyle === 'canopy') {
-          // 四角帐篷: lighter fill with X cross lines
-          ctx.fillStyle = hasOverlap ? '#FF444480' : col.fill + '70';
+        } else if (baseStyle === 'canopy' || baseStyle === 'roofed') {
+          // 无顶帐篷: lighter fill with X cross lines
+          ctx.fillStyle = hasOverlap ? '#FF444480' : col.fill + (baseStyle === 'roofed' ? 'b0' : '70');
           ctx.strokeStyle = hasOverlap ? '#CC0000' : col.stroke;
           ctx.lineWidth = sel ? 2.5 : 1.2;
           this._roundRect(ctx, x, y, w, h, 3);

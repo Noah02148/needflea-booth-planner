@@ -1,6 +1,6 @@
 // Shared measured plan, fixed structures, activity components and presentation views.
 (() => {
-  const defaults = () => ({ schema: 'needflea-environment/1', sitePlan: null, views: [], floorColor: '#d4cbbd', wallColor: '#deddd5', floorPattern: 'plain', floorTileMeters: 1, showPlan: true, showStructures: true, floorTexture: null, textureMeters: 2, photos: [], notes: '', generationPrompt: '', objects: [], analysis: null });
+  const defaults = () => ({ schema: 'needflea-environment/1', sitePlan: null, views: [], floorColor: '#d4cbbd', wallColor: '#deddd5', floorPattern: 'plain', floorTileMeters: 1, showPlan: true, showStructures: true, showAnnotations: true, floorTexture: null, textureMeters: 2, photos: [], notes: '', generationPrompt: '', objects: [], analysis: null });
   let state = defaults(), scene = null, loading = null, mode = null, firstPoint = null, selected = null;
   let photoPlacement = null, step = 'base';
   let boundaryDraft = null, sourceChoice = null;
@@ -28,7 +28,7 @@
       <div class="env-section"><h3>地面与材质</h3><div class="env-row"><label>地面颜色<input id="env-floor" type="color"></label><label>默认结构颜色<input id="env-wall" type="color"></label></div><div class="env-row"><label>地面纹理<select id="env-pattern"><option value="plain">纯色</option><option value="tile">瓷砖</option><option value="wood">木地板</option><option value="concrete">水泥</option></select></label><label>纹理单元（米）<input id="env-pattern-size" type="number" min="0.1" max="20" step="0.1"></label></div><label class="env-check"><input id="env-plan" type="checkbox"> 显示 CAD / 图片参考底图</label><label class="env-file">上传地面材质<input id="env-texture" type="file" accept="image/jpeg,image/png,image/webp" hidden></label><div class="env-row"><label>贴图宽度（米）<input id="env-tile" type="number" min="0.1" max="100" step="0.1"></label><button id="env-texture-remove">移除材质</button></div></div>
     </section>
     <section id="env-layout-panel" role="tabpanel" aria-labelledby="env-step-layout" hidden><h3>布置活动组件</h3><p>在平面或三维地面点击放置。组件的占地、位置、转角与离地高度共同保存；已有摊位继续同步显示。</p><div class="env-component-grid">${['stage','truss','counter','sign','table','fence'].map(t => `<button data-env-add="${t}">＋ ${types[t]}</button>`).join('')}</div><div id="env-layout-tools"></div><p>当前提供参数化基础组件；自定义模型和复杂品牌展亭需另行扩展。</p></section>
-    <section id="env-export-panel" role="tabpanel" aria-labelledby="env-step-export" hidden><h3>构图与出图</h3><p>选择视角后保存机位，调整画幅并导出。人视角从场地中心附近进入，可拖动环顾。</p><div class="env-row"><button id="env-overview">鸟瞰</button><button id="env-human">人视角</button></div><label>机位名称<input id="env-view-name" type="text" maxlength="60" placeholder="如：入口看向主舞台"></label><button id="env-view-save">保存当前机位</button><div id="env-view-list"></div><label>图片尺寸<select id="env-output-size"><option value="1920">1920 × 1080</option><option value="2560">2560 × 1440</option><option value="3840">3840 × 2160</option></select></label><button id="env-png">导出 3D 图片</button><label class="env-check"><input id="env-labels" type="checkbox" checked> 显示摊位与结构名称</label><details class="env-section env-data-tools"><summary>场景数据导入 / 导出</summary><div class="env-row"><button id="env-brief">导出建模资料</button><label class="env-file">导入场景 JSON<input id="env-import" type="file" accept=".json" hidden></label></div><button id="env-export">导出场景 JSON</button></details></section>
+    <section id="env-export-panel" role="tabpanel" aria-labelledby="env-step-export" hidden><h3>构图与出图</h3><p>选择视角后保存机位，调整画幅并导出。人视角从场地中心附近进入，可拖动环顾。</p><div class="env-row"><button id="env-overview">鸟瞰</button><button id="env-human">人视角</button></div><label>机位名称<input id="env-view-name" type="text" maxlength="60" placeholder="如：入口看向主舞台"></label><button id="env-view-save">保存当前机位</button><div id="env-view-list"></div><label>图片尺寸<select id="env-output-size"><option value="1920">1920 × 1080</option><option value="2560">2560 × 1440</option><option value="3840">3840 × 2160</option></select></label><button id="env-png">导出 3D 图片</button><label class="env-check"><input id="env-labels" type="checkbox" checked> 显示摊位与结构名称</label><label class="env-check"><input id="env-annotations" type="checkbox" checked> 显示二维标注（文字 / 动线 / 尺寸）</label><details class="env-section env-data-tools"><summary>场景数据导入 / 导出</summary><div class="env-row"><button id="env-brief">导出建模资料</button><label class="env-file">导入场景 JSON<input id="env-import" type="file" accept=".json" hidden></label></div><button id="env-export">导出场景 JSON</button></details></section>
     <div id="env-edit-tools" hidden><div class="env-section"><h3>尺寸与位置</h3><div class="env-row"><label>高度（米）<input id="env-height" type="number" value="3" min="0.01" max="100" step="0.1"></label><label>厚 / 宽（米）<input id="env-width" type="number" value="0.3" min="0.01" max="1000" step="0.1"></label><label>深度（米）<input id="env-depth" type="number" value="0.5" min="0.01" max="1000" step="0.1"></label></div><p>点击中心放置组件；墙体需点击起点和终点。选中后可编辑名称、尺寸与位置，右键点击删除。</p><button id="env-cancel" hidden>取消放置（Esc）</button><label class="env-check"><input id="env-structures" type="checkbox"> 显示场景组件</label><div id="env-object-list"></div><div id="env-object-editor" hidden></div></div></div>
     <p id="env-message" role="status" aria-live="polite"></p><p class="env-save-note">修改后使用顶部「保存」备份完整项目。</p>`;
   document.body.appendChild(panel);
@@ -69,7 +69,7 @@
     };
   }
   const hud = document.createElement('div'); hud.id = 'environment-hud'; hud.hidden = true;
-  hud.innerHTML = '<strong>场地三维预览</strong><span id="env-hud-tip">拖动旋转 · 滚轮缩放 · 右键平移</span><button id="env-hud-fit">适合视图</button><button id="env-photo-cancel" hidden>取消标注（Esc）</button>';
+  hud.innerHTML = '<strong>场地三维预览</strong><span id="env-hud-tip">拖动旋转 · 滚轮缩放 · 右键平移 · 画布聚焦后 WASD 平移</span><button id="env-hud-fit">适合视图</button><button id="env-photo-cancel" hidden>取消标注（Esc）</button>';
   wrap.appendChild(hud);
 
   function message(text) { $('env-message').textContent = text; }
@@ -123,7 +123,7 @@
       if (input[key] !== undefined && !validColor(input[key])) throw new Error(`${key} 应为 #RRGGBB 颜色`);
       if (input[key]) result[key] = input[key];
     }
-    for (const key of ['showPlan', 'showStructures']) if (typeof input[key] === 'boolean') result[key] = input[key];
+    for (const key of ['showPlan', 'showStructures', 'showAnnotations']) if (typeof input[key] === 'boolean') result[key] = input[key];
     if (input.floorTexture != null) {
       if (!validImage(input.floorTexture)) throw new Error('地面材质不是有效的内嵌图片');
       result.floorTexture = input.floorTexture;
@@ -186,12 +186,12 @@
   async function refresh(fit = false) {
     if (!scene || !_3dMode) return;
     const b = bounds();
-    await scene.update({ bounds: b, mpu: metersPerUnit, environment: state, booths, dark: darkMode, floorImage: floorImage(b) }, fit);
+    await scene.update({ bounds: b, mpu: metersPerUnit, environment: state, booths, planPixelMeters: metersPerUnit / Math.max(renderer.scale, 1e-9), dark: darkMode, floorImage: floorImage(b) }, fit);
   }
   function cancel() {
     mode = null; firstPoint = null; boundaryDraft = null; $('env-finish-boundary').hidden = true; $('env-cancel').hidden = true;
     host.style.cursor = ''; if (scene) scene.controls.enabled = true;
-    $('env-hud-tip').textContent = '拖动旋转 · 滚轮缩放 · 右键平移';
+    $('env-hud-tip').textContent = '拖动旋转 · 滚轮缩放 · 右键平移 · 画布聚焦后 WASD 平移';
   }
   function componentAt(x, y) {
     if (!state.showStructures) return null;
@@ -319,7 +319,7 @@
     if (photoPlacement) finishPhotoPlacement();
     cancel();
     photoPlacement = { photo, first: null, cursor: null, return3D: _3dMode };
-    _3dMode = false; canvas.style.visibility = ''; host.hidden = true;
+    scene?.stopNavigation(); _3dMode = false; canvas.style.visibility = ''; host.hidden = true;
     $('btn-environment').style.background = ''; $('btn-environment').style.color = '';
     setTool('photo-camera'); canvas.style.cursor = 'crosshair';
     hud.hidden = false; $('env-photo-cancel').hidden = false;
@@ -333,7 +333,7 @@
     const restore3D = returnToView && photoPlacement.return3D;
     photoPlacement = null; $('env-photo-cancel').hidden = true;
     hud.querySelector('strong').textContent = '场地三维预览';
-    $('env-hud-tip').textContent = '拖动旋转 · 滚轮缩放 · 右键平移';
+    $('env-hud-tip').textContent = '拖动旋转 · 滚轮缩放 · 右键平移 · 画布聚焦后 WASD 平移';
     setTool('select');
     if (restore3D && scene) {
       _3dMode = true; canvas.style.visibility = 'hidden'; host.hidden = false; hud.hidden = false;
@@ -390,7 +390,7 @@
   }
   function sync() {
     $('env-floor').value = state.floorColor; $('env-wall').value = state.wallColor;
-    $('env-plan').checked = state.showPlan; $('env-structures').checked = state.showStructures;
+    $('env-plan').checked = state.showPlan; $('env-structures').checked = state.showStructures; $('env-annotations').checked = state.showAnnotations;
     $('env-tile').value = state.textureMeters; $('env-notes').value = state.notes;
     $('env-pattern').value = state.floorPattern; $('env-pattern-size').value = state.floorTileMeters;
     if (state.sitePlan) $('env-boundary').value = state.sitePlan.points.map(p => `${p.x},${p.y}`).join('\n');
@@ -419,7 +419,7 @@
   $('env-photo-cancel').onclick = () => { finishPhotoPlacement(); message('已取消选点，保留原数据。'); };
   $('env-png').onclick = async () => { if (!_3dMode) await window.environmentUI.toggle(false); scene?.exportPNG(Number($('env-output-size').value)); };
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { finishPhotoPlacement(); cancel(); render(); } });
-  for (const [id, key] of [['env-floor', 'floorColor'], ['env-wall', 'wallColor'], ['env-plan', 'showPlan'], ['env-structures', 'showStructures'], ['env-tile', 'textureMeters'], ['env-pattern', 'floorPattern'], ['env-pattern-size', 'floorTileMeters']]) {
+  for (const [id, key] of [['env-floor', 'floorColor'], ['env-wall', 'wallColor'], ['env-plan', 'showPlan'], ['env-structures', 'showStructures'], ['env-annotations', 'showAnnotations'], ['env-tile', 'textureMeters'], ['env-pattern', 'floorPattern'], ['env-pattern-size', 'floorTileMeters']]) {
     $(id).onchange = () => {
       try {
         finishPhotoPlacement(false);
@@ -479,7 +479,7 @@
   };
 
   function show2D() {
-    finishPhotoPlacement(false); _3dMode = false;
+    finishPhotoPlacement(false); scene?.stopNavigation(); _3dMode = false;
     if (_isoRenderer) _isoRenderer.active = false;
     canvas.style.visibility = ''; host.hidden = true; hud.hidden = true;
     $('btn-environment').style.background = ''; $('btn-environment').style.color = ''; render(); syncStatus();
@@ -583,7 +583,7 @@
       const button = $('btn-environment'); button.disabled = true;
       try {
         if (!scene) {
-          loading ||= import('./scene-three.js?v=7').then(module => module.VenueScene).catch(err => { loading = null; throw err; });
+          loading ||= import('./scene-three.js?v=13').then(module => module.VenueScene).catch(err => { loading = null; throw err; });
           const Viewer = await loading;
           scene = new Viewer(host, groundClick, deleteAt);
         }
@@ -600,7 +600,7 @@
     },
     close() {
       finishPhotoPlacement(false);
-      cancel(); _3dMode = false; canvas.style.visibility = ''; host.hidden = panel.hidden = hud.hidden = true;
+      cancel(); scene?.stopNavigation(); _3dMode = false; canvas.style.visibility = ''; host.hidden = panel.hidden = hud.hidden = true;
       $('btn-environment').style.background = ''; $('btn-environment').style.color = ''; render(); syncStatus();
     },
     render() {

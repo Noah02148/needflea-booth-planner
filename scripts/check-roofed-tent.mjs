@@ -1,0 +1,41 @@
+import assert from 'node:assert/strict';
+import puppeteer from 'puppeteer';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+const dir=await mkdtemp(join(tmpdir(),'needflea-roofed-tent-'));
+const browser=await puppeteer.launch({headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
+try {
+  const page=await browser.newPage();await page.setViewport({width:1440,height:1000});page.setDefaultTimeout(30000);
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
+  await page.goto(process.env.NEEDFLEA_URL||'http://127.0.0.1:3002',{waitUntil:'networkidle0'});
+  await page.evaluate(async()=>{
+    const {VenueScene}=await import('./scene-three.js?v=13'),draw=VenueScene.prototype.draw;
+    VenueScene.prototype.draw=function(){window.roofScene=this;return draw.call(this);};
+    await projectIO.load({version:3,items:[],metersPerUnit:1,environment:{schema:'needflea-environment/1',objects:[],showLabels:false,sitePlan:{schema:'needflea-site-plan/1',points:[{x:0,y:0},{x:10,y:0},{x:10,y:6},{x:0,y:6}]}}});
+  });
+  await page.click('#btn-environment');await page.waitForFunction(()=>_3dMode&&!document.querySelector('#btn-environment').disabled);
+  await page.click('#toolbar-tab-layout');await page.select('#btn-booth','canopy-yard');
+  assert.equal(await page.$eval('#custom-w',e=>e.value),'4');
+  await page.select('#btn-booth','roofed');assert.equal(await page.$eval('#size-select',e=>e.value),'2x2');
+  assert.match(await page.$eval('#btn-booth option:checked',e=>e.textContent),/有顶帐篷/);
+  const project=async(x,y,h=0)=>page.evaluate((x,y,h)=>{const s=roofScene,r=s.renderer.domElement.getBoundingClientRect(),p=s.position(x,y,h).project(s.camera);return{x:r.left+(p.x+1)*r.width/2,y:r.top+(1-p.y)*r.height/2};},x,y,h);
+  const p=await project(3,3);await page.mouse.click(p.x,p.y);await page.waitForFunction(()=>booths.items.length===1);
+  assert.equal(await page.evaluate(()=>booths.items[0].boothStyle),'roofed');
+  assert.deepEqual(await page.evaluate(()=>[booths.items[0].ww,booths.items[0].wh,booths.items[0].height]),[2,2,2.5]);
+  await page.select('#btn-booth','canopy');const p2=await project(6,3);await page.mouse.click(p2.x,p2.y);await page.waitForFunction(()=>booths.items.length===2);
+  const geometry=await page.evaluate(async()=>{const {Box3}=await import('three');return roofScene.scene.children.filter(g=>g.userData.boothId).map(g=>{const roofs=g.children.filter(p=>p.name==='roofed-tent-fabric'),skirts=g.children.filter(p=>p.name==='roofed-tent-valance'),box=new Box3().setFromObject(g);return {id:g.userData.boothId,roofs:roofs.length,skirts:skirts.length,height:box.max.y,frameHeight:new Box3().setFromObject(g.getObjectByName('open-tent-frame')).max.y,frame:g.getObjectByName('open-tent-frame').children.filter(p=>p.isMesh).map(p=>({name:p.name,type:p.geometry.type,dimensions:[p.geometry.parameters.width,p.geometry.parameters.height,p.geometry.parameters.depth,p.geometry.parameters.radiusTop],count:p.count||1,matrix:p.isInstancedMesh?Array.from(p.instanceMatrix.array):p.matrix.toArray()})),roofWidth:roofs.length?new Box3().setFromObject(roofs[0]).union(new Box3().setFromObject(roofs[2])).max.x-new Box3().setFromObject(roofs[0]).union(new Box3().setFromObject(roofs[2])).min.x:0};});});
+  assert.equal(geometry[0].roofs,4);assert.equal(geometry[0].skirts,4);assert.ok(Math.abs(geometry[0].height-3.0)<.001);assert.ok(Math.abs(geometry[0].roofWidth-2)<.001);
+  assert.ok(Math.abs(geometry[0].frameHeight-2.5)<.001);
+  assert.deepEqual(geometry[0].frame,geometry[1].frame,'Covered and uncovered tents must have identical supporting frames');
+  assert.equal(geometry[1].roofs,0);assert.ok(Math.abs(geometry[1].height-2.5)<.001,'Existing open tent remains full height');
+  const saved=await page.evaluate(()=>projectIO.capture());
+  await page.click('#btn-select');const roofHit=await project(3,3,2.98);await page.mouse.click(roofHit.x,roofHit.y,{button:'right'});await page.waitForFunction(()=>booths.items.length===1);assert.equal(await page.evaluate(()=>booths.items[0].boothStyle),'canopy');
+  await page.evaluate(p=>projectIO.load(p),saved);
+  assert.equal(await page.evaluate(()=>booths.items[0].boothStyle),'roofed');
+  await page.evaluate(()=>{const c=document.createElement('canvas');c.width=1440;c.height=1000;const iso=new IsoRenderer(c);let called=0;const render=iso._drawRoofed;iso._drawRoofed=function(...args){called++;return render.apply(this,args);};iso.render(booths,metersPerUnit,false);if(called!==1)throw new Error('Roofed style missing from iso rendering');});
+  await page.evaluate(async()=>{const p=projectIO.capture();p.items=p.items.slice(0,1);Object.assign(p.items[0],{wx:3,wy:1,angle:0});p.environment.floorColor='#dadbd6';p.darkMode=false;await projectIO.load(p);await openEnvironment();roofScene.restoreView({position:[3.8,3.1,6.8],target:[-1,1.15,1],fov:40});roofScene.renderer.setPixelRatio(1);roofScene.renderer.setSize(1920,1080,false);roofScene.camera.aspect=16/9;roofScene.camera.updateProjectionMatrix();roofScene.draw();});
+  const preview=await page.evaluate(()=>roofScene.renderer.domElement.toDataURL('image/png').split(',')[1]);await writeFile(join(dir,'roofed-tent-preview.png'),Buffer.from(preview,'base64'));
+  assert.deepEqual(errors,[]);
+  console.log('PASS: distinct roofed option, 2x2 default from yard, 3D placement, four curved white roof panels and valances, identical 2.5m frame + 0.5m roof, open style unchanged, persistence and iso. Artifacts:',dir);
+} finally {await browser.close();}

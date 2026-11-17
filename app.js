@@ -346,7 +346,7 @@ function _snapBooth(item) {
     item.angle = bestSnap.angle;
     item._snapGuides = [{ snapped: true }];
 
-    // Composite booths (盘扣架/四角帐篷 ＋ 空地): push the frame to the corner
+    // Composite booths (盘扣架/无顶帐篷 ＋ 空地): push the frame to the corner
     // AWAY from the neighbour it snapped to, so the 空地 (yard) is what meets
     // the neighbour — 就近原则. Only the axis facing the neighbour is set; the
     // perpendicular axis keeps its current value.
@@ -1568,8 +1568,11 @@ function setBoothStyle(style) {
   const prev = activeBoothStyle;
   activeBoothStyle = style;
   setTool('booth');
-  // Composite styles (盘扣架/四角帐篷 ＋ 空地) default to 4×2m
+  // Composite styles (盘扣架/无顶帐篷 ＋ 空地) default to 4×2m
   // = a fixed 2×2 booth in one corner + 2×2 空地.
+  if (style === 'roofed' && prev !== style) {
+    document.getElementById('size-select').value = '2x2'; toggleCustomSize();
+  }
   const isComposite = style === 'tent-yard' || style === 'canopy-yard';
   if (isComposite && prev !== style) {
     const sizeSel = document.getElementById('size-select');
@@ -2243,7 +2246,7 @@ function showProps(item) {
   const selBooths = [...booths.selectedIds].map(id => booths.getItem(id)).filter(i => i && i.type === 'booth');
   if (selBooths.length > 1) {
     const CAT_OPTS_B = Object.keys(booths.CAT_COLORS).map(c => `<option value="${c}">${c}</option>`).join('');
-    const styleOptsB = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地'],['tent-yard','盘扣架＋空地'],['canopy-yard','四角帐篷＋空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
+    const styleOptsB = [['tent','盘扣架帐篷'],['canopy','无顶帐篷'],['roofed','有顶帐篷'],['table','空地'],['tent-yard','盘扣架＋空地'],['canopy-yard','无顶帐篷＋空地']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
     const sizeClassOptsB = [['mini','迷你摊位'],['standard','标准摊位'],['xl','特大摊位']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('');
     const sizes = ['2x2','2x4','3x3','1x1'];
     const sizeOptsB = sizes.map(s => `<option value="${s}">${s}m</option>`).join('');
@@ -2275,11 +2278,11 @@ function showProps(item) {
     const sizeOpts = sizes.map(s => `<option value="${s}" ${s === item.size ? 'selected' : ''}>${s}m</option>`).join('')
       + `<option value="custom" ${isCustomSize ? 'selected' : ''}>自定义…</option>`;
     const bStyle = item.boothStyle || 'tent';
-    const styleOpts = [['tent','盘扣架帐篷'],['canopy','四角帐篷'],['table','空地'],['tent-yard','盘扣架＋空地'],['canopy-yard','四角帐篷＋空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
+    const styleOpts = [['tent','盘扣架帐篷'],['canopy','无顶帐篷'],['roofed','有顶帐篷'],['table','空地'],['tent-yard','盘扣架＋空地'],['canopy-yard','无顶帐篷＋空地']].map(([v,l]) => `<option value="${v}" ${v === bStyle ? 'selected' : ''}>${l}</option>`).join('');
     const isCompositeStyle = bStyle === 'tent-yard' || bStyle === 'canopy-yard';
     const tc = item.tentCorner || { sx: -1, sy: 1 };
     const curCorner = `${tc.sx},${tc.sy}`;
-    const frameLabel = bStyle === 'canopy-yard' ? '帐篷位置' : '盘扣架位置';
+    const frameLabel = bStyle === 'canopy-yard' ? '无顶帐篷位置' : '盘扣架位置';
     const cornerOpts = [['-1,1','左上'],['1,1','右上'],['-1,-1','左下'],['1,-1','右下']]
       .map(([v,l]) => `<option value="${v}" ${v === curCorner ? 'selected' : ''}>${l}</option>`).join('');
     const sizeClass = item.sizeClass || 'standard';
@@ -2294,7 +2297,7 @@ function showProps(item) {
       <div class="prop-row" id="tent-corner-row-${item.id}" style="display:${isCompositeStyle ? 'flex' : 'none'}"><label>${frameLabel}</label>
         <select onchange="setTentCorner(${item.id},this.value)">${cornerOpts}</select>
       </div>
-      <div class="prop-row"><label>结构总高</label><span>2.5 m（空地不生成结构）</span></div>
+      <div class="prop-row"><label>支架高度</label><span>${bStyle === 'roofed' ? '2.5 m＋篷顶约 0.5 m' : '2.5 m（空地不生成结构）'}</span></div>
       <div class="prop-row"><label>摊位大小</label>
         <select onchange="updateItem(${item.id},'sizeClass',this.value)">${sizeClassOpts}</select>
       </div>
@@ -2354,7 +2357,7 @@ window.updateItem = function(id, key, val) {
   render();
 };
 
-// Manually pin the frame (盘扣架/四角帐篷) of a composite booth to a corner.
+// Manually pin the frame (盘扣架/无顶帐篷) of a composite booth to a corner.
 // Value is "sx,sy" in booth-local Y-up coords (sy>0 = top on screen).
 window.setTentCorner = function(id, val) {
   const [sx, sy] = val.split(',').map(Number);

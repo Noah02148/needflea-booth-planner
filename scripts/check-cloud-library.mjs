@@ -11,12 +11,13 @@ import { ossStore } from '../cloud/oss-store.mjs';
 
 const pageURL = process.env.NEEDFLEA_URL || 'http://127.0.0.1:3002';
 const objects = new Map();
-let versionStatus = '', writes = 0;
+let versionStatus = '', writes = 0, putFailure = null;
 const fake = {
   options: { bucket: 'test-bucket' },
   async getBucketVersioning(name) { assert.equal(name, 'test-bucket'); return { versionStatus }; },
   async get(name) { if (!objects.has(name)) throw Object.assign(new Error('missing'), {code:'NoSuchKey'}); return {content:Buffer.from(objects.get(name))}; },
   async put(name, bytes, opts) {
+    if (putFailure) throw putFailure;
     assert.equal(opts.headers['x-oss-forbid-overwrite'], 'true'); assert.equal(opts.headers['x-oss-object-acl'], 'private');
     if (objects.has(name)) throw Object.assign(new Error('exists'), {code:'FileAlreadyExists',status:409});
     objects.set(name, Buffer.from(bytes)); writes++; return {};
@@ -50,6 +51,12 @@ try {
   assert.equal(objects.size,count+1,'CAD/photo blobs are deduplicated between project revisions');
   assert.deepEqual(await store.readProject(digest),project);
   const now = Date.now(), first={expectedRevision:0,operationId:randomUUID(),changes:{sites:[{id:'http-test',name:'HTTP 测试',createdAt:now,updatedAt:now}],projects:[{id:'http-test',project}]}};
+  putFailure = Object.assign(new Error('private SDK URL and credential headers'), { code: 'RequestTimeout' });
+  const failed = await send(first);
+  assert.equal(failed.status,503); assert.equal(failed.data.code,'RequestTimeout'); assert.equal(failed.data.stage,'write-projects');
+  assert.ok(!JSON.stringify(failed.data).includes('private SDK'));
+  assert.equal((await store.latest()).revision,0,'Failed asset upload cannot publish a partial venue');
+  putFailure = null;
   const result = await send(first); assert.equal(result.status,200); assert.equal(result.data.revision,1);
   assert.equal((await send(first)).data.revision,1,'Same operation is idempotent');
   const changed=structuredClone(first);changed.changes.sites[0].name='different';assert.equal((await send(changed)).status,409);
@@ -63,9 +70,10 @@ try {
   const errors = [], dir = await mkdtemp(join(tmpdir(),'needflea-cloud-library-'));
   browser = await puppeteer.launch({headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
   const ctx1 = await browser.createBrowserContext(), ctx2 = await browser.createBrowserContext();
-  const makePage = async context => {
+  const makePage = async (context, configured = false) => {
     const p=await context.newPage();p.setDefaultTimeout(60000);await p.setViewport({width:1440,height:1100});
     p.on('pageerror',e=>errors.push(e.message));p.on('dialog',async d=>d.accept());
+    await p.setRequestInterception(true);p.on('request',r=>new URL(r.url()).pathname==='/cloud-config.js'?r.respond({status:200,contentType:'application/javascript',body:`window.NEEDFLEA_CLOUD_API_URL=${JSON.stringify(configured?api:'')};`}):r.continue());
     await p.goto(pageURL,{waitUntil:'networkidle0'});await p.waitForFunction(()=>!!window.environmentUI);return p;
   };
   const p1=await makePage(ctx1),p2=await makePage(ctx2);
@@ -83,7 +91,7 @@ try {
       for(const n of [1,2]){const p=structuredClone(layout);p.items[0].label=n===1?'A1':'B1';tx.objectStore('activities').put({id:'local-event-'+n+suffix,siteId:'local-site'+suffix,name:'市集 '+n,createdAt:now,updatedAt:now,itemCount:1});tx.objectStore('activityProjects').put({id:'local-event-'+n+suffix,project:p});}
       tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};r.onerror=()=>reject(r.error);
   }),{base,layout,now,suffix});
-  await seed(p1);await login(p1);await p1.click('#site-cloud-import');await idle(p1);
+  await seed(p1);await login(p1);assert.equal(await p1.$eval('#site-cloud-more',e=>e.open),false);await p1.click('#site-cloud-more > summary');await p1.click('#site-cloud-import');await idle(p1);
   assert.ok((await p1.$eval('#site-message',e=>e.textContent)).includes('已上传 1'));
   assert.equal(await p1.$$eval('[data-activity-load]',es=>es.length),2);
   const beforeRevision=await p1.evaluate(()=>venueCloud.revision());
@@ -97,7 +105,7 @@ try {
   await open(p1);await p1.click('#site-update');await idle(p1);
   assert.ok((await p1.$eval('#site-message',e=>e.textContent)).includes('其他设备更新'));assert.equal(await p1.evaluate(()=>booths.items[0].label),'设备一未保存');
   await p1.click('#site-cloud-refresh');await idle(p1);assert.equal(await p1.evaluate(()=>booths.items[0].label),'设备一未保存');await load(p1,'local-event-1');assert.equal(await p1.evaluate(()=>booths.items[0].label),'设备二已保存');
-  await open(p1);await p1.click('#site-storage-local');await idle(p1);await load(p1,'local-event-1');assert.equal(await p1.evaluate(()=>booths.items[0].label),'A1','Migration and cloud edits preserve local originals');
+  await open(p1);await p1.click('#site-cloud-more > summary');await p1.click('#site-storage-local');await idle(p1);await load(p1,'local-event-1');assert.equal(await p1.evaluate(()=>booths.items[0].label),'A1','Migration and cloud edits preserve local originals');
   // Simulate a lost response after the server has committed; retry must reuse the exact operation.
   await open(p2);await p2.evaluate(()=>{booths.items[0].label='已提交但响应丢失';render();});
   await p2.evaluate(()=>{const original=window.fetch;let once=true;window.fetch=async(...args)=>{const response=await original(...args);if(once&&String(args[0]).endsWith('/commit')){once=false;throw new TypeError('test response lost');}return response;};});
@@ -105,6 +113,43 @@ try {
   const pendingRevision=await p2.evaluate(()=>venueCloud.revision());await p2.click('#site-cloud-retry');await idle(p2);assert.equal(await p2.evaluate(()=>venueCloud.revision()),pendingRevision+1);
   await load(p2,'local-event-1');assert.equal(await p2.evaluate(()=>booths.items[0].label),'已提交但响应丢失');
   await p2.reload({waitUntil:'networkidle0'});await open(p2);assert.equal(await p2.$eval('#site-storage-cloud',e=>e.getAttribute('aria-pressed')),'true');
-  await p2.screenshot({path:join(dir,'cloud-desktop.png')});await p2.setViewport({width:390,height:900});await p2.screenshot({path:join(dir,'cloud-mobile.png')});
+  await p2.screenshot({path:join(dir,'cloud-desktop.png')});await p2.setViewport({width:390,height:900});
+  assert.equal(await p2.$('.site-storage-picker'),null,'Cloud and local are no longer peer tabs');
+  assert.equal(await p2.$eval('#site-cloud-more',e=>e.open),false);
+  assert.ok(await p2.$eval('.site-library-tools',e=>e.scrollWidth<=e.clientWidth),'Management controls fit the mobile dialog');
+  await p2.screenshot({path:join(dir,'cloud-mobile.png')});
+  await p2.evaluate(()=>{const original=window.fetch;window.fetch=async(...args)=>String(args[0]).endsWith('/library')?new Response(JSON.stringify({error:'测试：登录已过期'}),{status:401,headers:{'Content-Type':'application/json'}}):original(...args);});
+  await p2.click('#site-cloud-refresh');await idle(p2);
+  assert.equal(await p2.$eval('#site-cloud-form',e=>e.hidden),false,'Server-side expiry returns to login without hiding behind a stale client session');
+  assert.equal(await p2.evaluate(()=>venueCloud.connected()),false);
+  assert.equal(await p2.evaluate(()=>sessionStorage.getItem('needflea_cloud_session_v1')),null);
+  // Colleagues use the deployed endpoint without entering a server address.
+  const ctx3=await browser.createBrowserContext(),p3=await makePage(ctx3,true);
+  await p3.evaluate(()=>localStorage.setItem('needflea_library_mode','local'));
+  await open(p3);
+  assert.equal(await p3.$eval('#site-storage-cloud',e=>e.getAttribute('aria-pressed')),'true');
+  assert.equal(await p3.$eval('#site-cloud-settings',e=>e.hidden),true);
+  assert.equal(await p3.$eval('#site-storage-cloud',e=>e.hidden),true,'Team deployment opens cloud even with an old local preference');
+  await p3.click('#site-cloud-more > summary');await p3.click('#site-storage-local');await idle(p3);
+  assert.equal(await p3.$eval('#site-library-content',e=>e.hidden),false,'Offline library is accessible before cloud login');
+  assert.equal(await p3.$eval('#site-storage-cloud',e=>e.hidden),false);
+  await p3.click('#site-storage-cloud');await idle(p3);
+  assert.equal(await p3.$eval('#site-cloud-form',e=>e.hidden),false);
+  await p3.type('#site-cloud-password',password);await p3.click('#site-cloud-login');await idle(p3);
+  await load(p3,'local-event-1');assert.equal(await p3.evaluate(()=>booths.items[0].label),'已提交但响应丢失');
+  await open(p3);await p3.$eval('#site-create-details',e=>e.open=true);
+  await p3.type('#site-name','云端新场地');await p3.type('#site-event','团队活动');await p3.select('#site-source','current');
+  await p3.click('#site-create');await idle(p3);
+  const created=await p3.evaluate(async()=>{const lib=await venueCloud.refresh();const site=lib.sites.find(s=>s.name==='云端新场地');return lib.activities.find(a=>a.siteId===site?.id)?.id;});assert.ok(created);
+  const ctx4=await browser.createBrowserContext(),p4=await makePage(ctx4,true);
+  await open(p4);await p4.type('#site-cloud-password',password);await p4.click('#site-cloud-login');await idle(p4);
+  const button=await p4.$$('button[data-site-select]');assert.ok(button.length>=2);
+  const newSite=await p4.evaluate(async()=>{const lib=await venueCloud.refresh();return lib.sites.find(s=>s.name==='云端新场地').id;});
+  await p4.click(`[data-site-select="${newSite}"]`);await idle(p4);await load(p4,created);
+  assert.equal(await p4.evaluate(()=>booths.items[0].label),'已提交但响应丢失','Cloud-created venue and layout are available to a fresh device');
+  await open(p4);await p4.screenshot({path:join(dir,'team-library.png')});await p4.setViewport({width:390,height:900});await p4.screenshot({path:join(dir,'team-library-mobile.png')});await p4.setViewport({width:1440,height:1100});
+  await p4.click('#site-cloud-more > summary');await p4.click('#site-cloud-logout');await idle(p4);assert.equal(await p4.$eval('#site-cloud-form',e=>e.hidden),false);
+  await p4.reload({waitUntil:'networkidle0'});await open(p4);assert.equal(await p4.$eval('#site-storage-cloud',e=>e.getAttribute('aria-pressed')),'true');
+  await ctx3.close();await ctx4.close();
   assert.deepEqual(errors,[]);console.log('PASS: OSS private immutable writes, blob dedup, restart, auth/CORS, concurrent conflict, idempotent retry, local migration, two-device load/save, local preservation, refresh, mobile. Artifacts:',dir);
 } finally { if(browser)await browser.close();await new Promise(resolve=>server.close(resolve)); }

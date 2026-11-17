@@ -11,9 +11,14 @@
     return url.href.replace(/\/$/, '');
   }
   function remember() { if (session) sessionStorage.setItem(savedKey, JSON.stringify(session)); else sessionStorage.removeItem(savedKey); }
+  function connected() {
+    if (!session || session.expiresAt <= Date.now()) return false;
+    try { return !window.NEEDFLEA_CLOUD_API_URL || session.url === validateURL(window.NEEDFLEA_CLOUD_API_URL); }
+    catch { return false; }
+  }
   async function request(path, value, authenticated = true) {
     const url = authenticated ? session?.url : configURL();
-    if (!url || authenticated && (!session || session.expiresAt <= Date.now())) throw new Error('请先登录云端场地库。');
+    if (!url || authenticated && !connected()) throw new Error('请先登录云端场地库。');
     const headers = {}, options = { method: value === undefined ? 'GET' : 'POST', headers, cache: 'no-store', credentials: 'omit' };
     if (authenticated) headers.Authorization = 'Bearer ' + session.token;
     if (value !== undefined) {
@@ -30,7 +35,10 @@
     try {
       const response = await fetch(url + path, options);
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw Object.assign(new Error(data.error || `云端请求失败（${response.status}）`), { status: response.status });
+      if (!response.ok) {
+        if (response.status === 401) { session = null; requestPending = null; remember(); }
+        throw Object.assign(new Error(data.error || `云端请求失败（${response.status}）`), { status: response.status });
+      }
       return data;
     } catch (error) {
       if (error.name === 'AbortError') throw new Error('云端等待超时，当前画布仍保留。请重试原操作以确认是否保存成功。');
@@ -58,7 +66,7 @@
   }
   window.venueCloud = {
     configuredURL: configURL,
-    connected: () => !!session && session.expiresAt > Date.now(),
+    connected,
     revision: () => manifest?.revision,
     pending: () => !!requestPending,
     async retryPending() {
@@ -66,7 +74,7 @@
       const next = accept(await request('/commit', requestPending.payload)); requestPending = null; return next;
     },
     async login(url, password) {
-      const target = validateURL(url); localStorage.setItem('needflea_cloud_url', target);
+      const target = validateURL(window.NEEDFLEA_CLOUD_API_URL || url); localStorage.setItem('needflea_cloud_url', target);
       // Login never sends an old session token to a newly entered URL.
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);
       try {

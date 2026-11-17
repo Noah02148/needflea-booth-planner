@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NEED! FLEA — 摊位规划工具</title>
 <link rel="stylesheet" href="environment.css?v=13">
-<link rel="stylesheet" href="site-library.css?v=3">
+<link rel="stylesheet" href="site-library.css?v=6">
 <script type="importmap">
 {"imports":{"three":"./vendor/three/three.module.js","three/addons/":"./vendor/three/"}}
 </script>
@@ -231,10 +231,11 @@
       <div id="layout-booths" class="layout-controls" role="tabpanel" aria-labelledby="layout-tab-booths">
         <select class="tb-btn" id="btn-booth" onchange="setBoothStyle(this.value)" onfocus="setBoothStyle(this.value)">
     <option value="tent">⬜ 盘扣架帐篷</option>
-    <option value="canopy">⛺ 四角帐篷</option>
+    <option value="canopy">⛺ 无顶帐篷</option>
+    <option value="roofed">⛺ 有顶帐篷</option>
     <option value="table">▦ 空地</option>
     <option value="tent-yard">⬜＋▦ 盘扣架＋空地</option>
-    <option value="canopy-yard">⛺＋▦ 四角帐篷＋空地</option>
+    <option value="canopy-yard">⛺＋▦ 无顶帐篷＋空地</option>
   </select>
   <div id="cat-picker">
     <div class="cat-dot active" style="background:#5B8FE8" data-cat="二手" title="二手" onclick="selectCat(this)"></div>
@@ -259,7 +260,7 @@
     <span style="color:var(--text3);font-size:12px">m</span>
   </span>
 
-      <span class="toolbar-note">帐篷总高 2.5m</span>
+      <span class="toolbar-note">支架高 2.5m</span>
       <button class="tb-btn" id="btn-guard" onclick="setTool('guard')">👮 安保</button>
       <button class="tb-btn" id="btn-fire" onclick="setTool('fire')">🧯 灭火器</button>
       <div class="tb-sep"></div>
@@ -450,13 +451,13 @@
 <script src="cad-text.js?v=1"></script>
 <script src="dxf-parser.js?v=9"></script>
 <script src="renderer.js?v=10"></script>
-<script src="booth.js?v=9"></script>
-<script src="iso-renderer.js?v=2"></script>
-<script src="app.js?v=27"></script>
+<script src="booth.js?v=11"></script>
+<script src="iso-renderer.js?v=6"></script>
+<script src="app.js?v=28"></script>
 <script src="toolbar.js?v=3"></script>
-<script src="cloud-config.js?v=1"></script>
-<script src="site-cloud.js?v=1"></script>
-<script src="site-library.js?v=5"></script>
-<script type="module" src="environment.js?v=16"></script>
+<script src="cloud-config.js?v=3"></script>
+<script src="site-cloud.js?v=3"></script>
+<script src="site-library.js?v=8"></script>
+<script type="module" src="environment.js?v=22"></script>
 </body>
 </html>

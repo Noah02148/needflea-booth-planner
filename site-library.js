@@ -7,19 +7,20 @@
   const dialog = document.createElement('dialog'); dialog.id = 'site-library-dialog';
   dialog.innerHTML = `
     <div class="site-heading"><div><small>VENUES & ACTIVITIES</small><h2>场地与活动</h2></div><button id="site-close" aria-label="关闭场地库">×</button></div>
-    <p class="site-note">一个场地可保存多个活动布局。场地基础保存底图、比例尺与环境；每个活动独立保存摊位和标注。</p>
-    <div class="site-storage-picker" aria-label="场地库位置"><button id="site-storage-local" aria-pressed="true">本地</button><button id="site-storage-cloud" aria-pressed="false">云端 · 多设备共享</button></div>
-    <p id="site-storage-status" class="site-note"></p>
+    <p class="site-note">选择场地，载入活动，继续布置。</p>
+    <div class="site-library-tools"><p id="site-storage-status" class="site-note"></p><div class="site-actions"><button id="site-storage-cloud" hidden>返回云端</button><details id="site-cloud-more" class="site-more"><summary>更多管理</summary><p class="site-note">本机场地仅保存在此浏览器，可用于离线布置，或上传到云端共享。</p><button id="site-storage-local">浏览本机场地</button><div id="site-cloud-tools" hidden><div class="site-actions"><button id="site-cloud-import">上传本机场地库</button><button id="site-cloud-logout">退出云端登录</button></div></div></details></div></div>
+    <div id="site-cloud-actions" class="site-actions" hidden><button id="site-cloud-refresh">刷新列表</button><button id="site-cloud-retry" hidden>确认上次保存</button></div>
     <section id="site-cloud-section" hidden>
       <form id="site-cloud-form"><details id="site-cloud-settings"><summary>云端连接设置</summary><label>云端接口地址<input id="site-cloud-url" type="url" placeholder="https://你的云端接口域名" autocomplete="url" required></label><p class="site-note">连接你自己的阿里云场地库服务，不填写 OSS AccessKey。</p></details><label>云端访问密码<input id="site-cloud-password" type="password" autocomplete="current-password" required maxlength="256"></label><button id="site-cloud-login" type="submit">登录云端场地库</button></form>
-      <div id="site-cloud-tools" hidden><div class="site-actions"><button id="site-cloud-refresh">刷新云端</button><button id="site-cloud-retry" hidden>确认上次保存</button><button id="site-cloud-import">上传本机场地库</button><button id="site-cloud-logout">退出云端登录</button></div><p class="site-note">上传会包含本机已保存的全部场地与活动，保留本地原记录；同名场地作为副本导入，不覆盖云端布局。保存活动后，其他设备登录同一云端库即可载入。</p></div>
+
     </section>
     <div id="site-library-content">
-    <section id="site-current" hidden><h3 id="site-current-title">当前画布</h3><div class="site-actions"><button id="site-update">保存当前活动布局</button><button id="site-export-current">导出当前项目 JSON</button></div><details><summary>名称与场地基础设置</summary><label>所属场地<input id="site-current-name" maxlength="100"></label><label id="site-current-event-label">当前活动名称<input id="site-current-event" maxlength="200"></label><p id="site-current-kind" class="site-note"></p><button id="site-update-base">保存场地基础（不含摊位）</button></details></section>
-    <section><h3>01 · 选择场地</h3><label>搜索场地 / 活动<input id="site-search" type="search" placeholder="场地或活动名称"></label><div id="site-list"></div></section>
-    <section id="site-activities" hidden><h3 id="site-activities-title"></h3><p class="site-note">选择活动载入对应布局；历史活动不会被新活动覆盖。</p><div class="site-actions"><button id="site-load-base">载入场地基础（空布局）</button><button id="site-export-base">导出场地基础 JSON</button></div><div id="site-activity-list"></div>
-      <details id="activity-create-details"><summary>＋ 为此场地新建活动</summary><form id="activity-create-form"><label>活动名称<input id="activity-name" required maxlength="200" placeholder="如：NEED! FLEA 2027"></label><label>活动布局来源<select id="activity-source"><option value="file">导入另一份项目 JSON</option><option value="base">从场地基础开始（空布局）</option><option value="current">使用当前画布布局</option></select></label><label id="activity-file-label">活动项目 JSON<input id="activity-file" type="file" accept=".json"></label><p class="site-note">JSON 自带底图时使用其底图；没有底图时继承此场地基础。新建活动后，修改只保存到该活动。</p><button id="activity-create" type="submit">保存并载入新活动</button></form></details>
-    </section>
+    <section id="site-current" hidden><div class="site-current-main"><div><small class="site-eyebrow">正在编辑</small><h3 id="site-current-title">当前画布</h3><p id="site-save-note" class="site-note"></p></div><button id="site-update">保存当前活动</button></div><details id="site-current-settings"><summary>备份与设置</summary><button id="site-export-current">下载当前项目 JSON</button><label>所属场地<input id="site-current-name" maxlength="100"></label><label id="site-current-event-label">当前活动名称<input id="site-current-event" maxlength="200"></label><p id="site-current-kind" class="site-note"></p><button id="site-update-base">保存场地基础（不含摊位）</button></details></section>
+    <div class="site-workspace"><section class="site-venues"><div class="site-section-heading"><h3>场地</h3><button id="site-new-button">＋ 新建场地</button></div><label class="site-search-label">搜索场地 / 活动<input id="site-search" type="search" placeholder="场地或活动名称"></label><label class="site-mobile-picker">选择场地<select id="site-mobile-select" aria-label="选择场地"></select></label><div id="site-list"></div></section>
+    <section id="site-activities" hidden><small class="site-eyebrow">活动布局</small><h3 id="site-activities-title"></h3><p class="site-note">载入一份活动，继续编辑或布置。</p><div id="site-activity-list"></div>
+      <details id="activity-create-details"><summary>＋ 为此场地新建活动</summary><form id="activity-create-form"><label>活动名称<input id="activity-name" required maxlength="200" placeholder="如：NEED! FLEA 2027"></label><label>活动布局来源<select id="activity-source"><option value="base">从空白场地开始</option><option value="current">复制当前画布布局</option><option value="file">导入项目 JSON</option></select></label><label id="activity-file-label" hidden>活动项目 JSON<input id="activity-file" type="file" accept=".json"></label><p class="site-note">JSON 自带底图时使用其底图；没有底图时继承此场地基础。新建活动后，修改只保存到该活动。</p><button id="activity-create" type="submit">保存并载入新活动</button></form></details>
+      <details id="site-base-settings"><summary>场地底图与基础</summary><p class="site-note">复用底图、比例尺和固定结构；不含活动摊位。</p><div class="site-actions"><button id="site-load-base">载入空白场地</button><button id="site-export-base">下载场地基础 JSON</button></div></details>
+    </section></div>
     <details id="site-create-details"><summary>＋ 新建场地</summary><form id="site-create-form"><label>场地名称<input id="site-name" required maxlength="100" placeholder="如：深圳 ING 创意社区"></label><label>首个活动名称（选填）<input id="site-event" maxlength="200" placeholder="如：NEED! FLEA 2026"></label><label>场地来源<select id="site-source"><option value="file">导入 CAD / 已有项目 JSON</option><option value="current">使用当前画布</option></select></label><label id="site-file-label">选择文件<input id="site-file" type="file" accept=".dxf,.dwg,.json"></label><p class="site-note">场地基础不含摊位；导入 JSON 中的已有布局会单独保存为首个活动。</p><button id="site-create" type="submit">保存并载入新场地</button></form></details>
     </div><p id="site-message" role="status" aria-live="polite"></p>`;
   document.body.append(dialog);
@@ -37,9 +38,13 @@
     $('site-cloud-section').hidden = !cloudView;
     $('site-cloud-form').hidden = !!connected;
     $('site-cloud-tools').hidden = !connected;
+    $('site-cloud-actions').hidden = !connected;
+    $('site-storage-cloud').hidden = cloudView;
+    $('site-storage-local').hidden = !cloudView;
     $('site-cloud-retry').hidden = !window.venueCloud?.pending();
     $('site-library-content').hidden = cloudView && !connected;
-    $('site-storage-status').textContent = !cloudView ? `本地库 · 仅保存在当前浏览器的 ${location.host}，其他网址和电脑不会自动读取。` : connected ? `云端库 · 已连接 · 版本 ${window.venueCloud.revision()} · 活动保存后可跨设备载入。` : '尚未登录云端。本地场地和当前画布均保留。';
+    $('site-save-note').textContent = storage === 'cloud' ? '保存到云端，团队成员刷新后可载入。' : '保存在此浏览器，可下载 JSON 备份。';
+    $('site-storage-status').textContent = !cloudView ? '本机场地 · 离线模式，仅当前浏览器可用' : connected ? '云端已连接 · 团队共享' : '云端场地库 · 登录后可与团队共享';
   }
   const snapshot = () => window.projectIO.capture(false);
   const fingerprint = project => JSON.stringify({ ...project, viewport: undefined, darkMode: undefined, venue: undefined });
@@ -175,7 +180,7 @@
     const site = records.find(r => r.id === activeSiteId), activity = activities.find(a => a.id === activeActivityId);
     $('site-current').hidden = !site;
     if (site) {
-      $('site-current-title').textContent = `当前：${site.name} · ${activity?.name || '场地基础'}`;
+      $('site-current-title').textContent = `${activity?.name || site.name} · ${activity ? site.name : '场地基础'}`;
       $('site-current-name').value = site.name; $('site-current-event').value = activity?.name || '';
       $('site-current-event-label').hidden = $('site-update').hidden = !activity;
       $('site-current-kind').textContent = activity ? '保存当前活动只更新这份布局，其他活动不变。保存场地基础仅更新可复用的底图与环境。' : '当前是场地基础，不含活动布局。可在下方新建活动。';
@@ -189,32 +194,37 @@
   }
   function renderList() {
     const list = $('site-list'); list.replaceChildren(); list.scrollTop = 0; const query = $('site-search').value.trim().toLocaleLowerCase();
+    const picker = $('site-mobile-select'); picker.replaceChildren();
+    for (const site of records) { const option = document.createElement('option'); option.value = site.id; option.textContent = site.name; option.selected = site.id === selectedSiteId; picker.append(option); }
+    if (!records.length) { const option = document.createElement('option'); option.textContent = '暂无场地，请先新建'; picker.append(option); }
     const visible = records.filter(r => `${r.name} ${activities.filter(a => a.siteId === r.id).map(a => a.name).join(' ')}`.toLocaleLowerCase().includes(query));
     if (!visible.length) { const p = document.createElement('p'); p.className = 'site-note'; p.textContent = records.length ? '没有匹配的场地或活动。' : '还没有场地，请在下方新建。'; list.append(p); }
     for (const site of visible) {
       const row = document.createElement('div'); row.className = 'site-record'; row.classList.toggle('site-record-selected', site.id === selectedSiteId);
       const title = document.createElement('strong'); title.textContent = site.name;
-      const note = document.createElement('p'); note.textContent = `${activities.filter(a => a.siteId === site.id).length} 个活动 · ${site.sourceName || '场地基础'}`;
-      const choose = button('选择活动', () => { selectedSiteId = site.id; renderList(); renderActivities(); $('site-activities-title').scrollIntoView({ block: 'nearest' }); }, 'siteSelect', site.id);
+      const note = document.createElement('p'); note.textContent = `${activities.filter(a => a.siteId === site.id).length} 个活动`;
+      const choose = button(site.id === selectedSiteId ? '已选择' : '查看活动', () => { selectedSiteId = site.id; renderList(); renderActivities(); $('site-activities-title').scrollIntoView({ block: 'nearest' }); }, 'siteSelect', site.id);
       row.append(title, note, choose); list.append(row);
     }
   }
   function renderActivities() {
     const site = records.find(r => r.id === selectedSiteId); $('site-activities').hidden = !site;
     if (!site) return;
-    $('site-activities-title').textContent = `02 · ${site.name}的活动`;
+    $('site-activities-title').textContent = site.name;
     const list = $('site-activity-list'); list.replaceChildren(); list.scrollTop = 0;
-    const scoped = activities.filter(a => a.siteId === site.id);
+    const scoped = activities.filter(a => a.siteId === site.id).sort((a, b) => Number(b.id === activeActivityId) - Number(a.id === activeActivityId));
     if (!scoped.length) { const empty = document.createElement('p'); empty.className = 'site-note'; empty.textContent = '此场地还没有活动，使用下方入口创建第一份布局。'; list.append(empty); }
     for (const activity of scoped) {
       const row = document.createElement('div'); row.className = 'site-record';
       const title = document.createElement('strong'); title.textContent = activity.name + (activity.id === activeActivityId ? ' · 当前活动' : '');
       const meta = document.createElement('p'); meta.textContent = `${activity.itemCount} 个标注 · ${new Date(activity.updatedAt).toLocaleString()}`;
       const actions = document.createElement('div'); actions.className = 'site-actions';
-      actions.append(button('载入活动', () => loadActivity(activity.id), 'activityLoad', activity.id), button('导出活动 JSON', async () => {
+      actions.append(button('载入编辑', () => loadActivity(activity.id), 'activityLoad', activity.id), button('导出活动 JSON', async () => {
         const saved = await transaction(['activityProjects'], 'readonly', tx => tx.objectStore('activityProjects').get(activity.id));
         if (!saved) throw new Error('活动数据不存在。'); exportProject(activityProject(saved.project, site, activity.name), `${site.name}_${activity.name}`); message('活动完整项目已导出，包含底图和环境。');
       }, 'activityExport', activity.id));
+      const more = document.createElement('details'); more.className = 'site-activity-more';
+      const summary = document.createElement('summary'); summary.textContent = '备份'; more.append(summary, actions.lastChild); actions.append(more);
       row.append(title, meta, actions); list.append(row);
     }
   }
@@ -229,6 +239,8 @@
     $('tool-hint').textContent = `已载入：${site.name} · ${activity.name}`;
   }
   async function run(action) { if (busy) return; lock(true); try { await action(); } catch (err) { message(err.message || '操作失败，请重试。', true); } finally { lock(false); } }
+  $('site-mobile-select').onchange = () => { selectedSiteId = $('site-mobile-select').value; renderList(); renderActivities(); };
+  $('site-new-button').onclick = () => { $('site-create-details').open = !$('site-create-details').open; if ($('site-create-details').open) { $('site-create-details').scrollIntoView({ block: 'nearest' }); $('site-name').focus(); } };
   $('site-search').oninput = renderList;
   $('site-source').onchange = () => { $('site-file-label').hidden = $('site-source').value !== 'file'; };
   $('activity-source').onchange = () => { $('activity-file-label').hidden = $('activity-source').value !== 'file'; };
@@ -267,7 +279,7 @@
         tx.objectStore('activities').put({ id, siteId, name: title, createdAt: now, updatedAt: now, itemCount: project.items.length });
         tx.objectStore('activityProjects').put({ id, project });
       }), siteId, id);
-      $('activity-create-form').reset(); $('activity-file-label').hidden = false; message('新活动已保存并载入，其他活动布局保持不变。');
+      $('activity-create-form').reset(); $('activity-file-label').hidden = true; $('activity-create-details').open = false; message('新活动已保存并载入，其他活动布局保持不变。');
     });
   };
   $('site-update').onclick = () => {
@@ -308,14 +320,18 @@
   });
   $('site-export-current').onclick = () => window.saveProject();
   $('site-cloud-url').value = window.venueCloud?.configuredURL() || '';
+  // A deployed team endpoint is configured once, not by each colleague.
+  $('site-cloud-settings').hidden = !!window.NEEDFLEA_CLOUD_API_URL;
+  $('site-cloud-url').readOnly = !!window.NEEDFLEA_CLOUD_API_URL;
   $('site-cloud-settings').open = !$('site-cloud-url').value;
   $('site-storage-local').onclick = () => run(async () => {
     if (storage !== 'local') unbind();
+    $('site-cloud-more').open = false;
     storage = 'local'; cloudView = false; localStorage.setItem('needflea_library_mode', 'local');
     await refreshList(); message('已切换到本地库，当前画布保留。');
   });
   $('site-storage-cloud').onclick = () => run(async () => {
-    cloudView = true;
+    cloudView = true; $('site-cloud-more').open = false;
     if (window.venueCloud?.connected()) {
       const before = window.venueCloud.revision();
       await window.venueCloud.reconnect(); if (storage !== 'cloud' || before !== window.venueCloud.revision()) unbind();
@@ -357,11 +373,16 @@
   window.addEventListener('needflea-project-loaded', () => { activeSiteId = activeActivityId = null; baseline = ''; renderCurrent(); });
   window.openSiteLibrary = () => {
     if (window.environmentUI?.hasPendingPreview()) { $('tool-hint').textContent = '请先应用、放弃或取消环境预览，再选择场地。'; return; }
-    if (!dialog.open) dialog.showModal(); dialog.scrollTop = 0; message('');
+    if (!dialog.open) {
+      for (const id of ['site-current-settings', 'site-base-settings', 'activity-create-details', 'site-cloud-more']) $(id).open = false;
+      dialog.showModal();
+    }
+    dialog.scrollTop = 0; message('');
     run(async () => {
       if (firstOpen) {
         firstOpen = false;
-        if (localStorage.getItem('needflea_library_mode') === 'cloud') {
+        const preferred = localStorage.getItem('needflea_library_mode');
+        if (window.NEEDFLEA_CLOUD_API_URL || preferred === 'cloud') {
           cloudView = true;
           if (window.venueCloud?.connected()) { await window.venueCloud.reconnect(); storage = 'cloud'; }
         }

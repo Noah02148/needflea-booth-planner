@@ -11,7 +11,7 @@ try {
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',async d=>{dialogs.push(d.message());accept?await d.accept():await d.dismiss();});
   await page.goto(process.env.NEEDFLEA_URL||'http://127.0.0.1:3002',{waitUntil:'networkidle0'});
   await page.evaluate(async()=>{
-    const {VenueScene}=await import('./scene-three.js?v=7');const draw=VenueScene.prototype.draw;
+    const {VenueScene}=await import('./scene-three.js?v=13');const draw=VenueScene.prototype.draw;
     VenueScene.prototype.draw=function(){window.testScene=this;return draw.call(this);};
     await projectIO.load({version:3,items:[],metersPerUnit:1,environment:{schema:'needflea-environment/1',objects:[],sitePlan:{schema:'needflea-site-plan/1',points:[{x:0,y:0},{x:40,y:0},{x:40,y:25},{x:0,y:25}]}}});
   });

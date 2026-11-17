@@ -8,6 +8,8 @@ const dir=await mkdtemp(join(tmpdir(),'needflea-site-activities-'));
 const browser=await puppeteer.launch({headless:true,args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
 try{
   const page=await browser.newPage();await page.setViewport({width:1440,height:1100});page.setDefaultTimeout(60000);
+  const localOnly = async p => { await p.setRequestInterception(true);p.on('request',r=>new URL(r.url()).pathname==='/cloud-config.js'?r.respond({status:200,contentType:'application/javascript',body:"window.NEEDFLEA_CLOUD_API_URL='';"}):r.continue()); };
+  await localOnly(page);
   const errors=[],dialogs=[];let accept=true;
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',async d=>{dialogs.push(d.message());if(accept)await d.accept();else await d.dismiss();});
   const cdp=await page.createCDPSession();await cdp.send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:dir});
@@ -36,6 +38,9 @@ try{
     if(file)await(await page.$('#activity-file')).uploadFile(file);await page.click('#activity-create');await idle();
   };
   await open();
+  assert.equal(await page.$eval('#site-base-settings',e=>e.open),false,'Base operations are secondary');
+  await page.click('#site-new-button');assert.equal(await page.$eval('#site-create-details',e=>e.open),true);
+  await page.click('#site-new-button');assert.equal(await page.$eval('#site-create-details',e=>e.open),false);
   const migrated=await dbGet('activities');assert.equal(migrated.length,1);const firstId=migrated[0].id;
   assert.equal(migrated[0].name,'NEED! FLEA 2026');
   assert.deepEqual((await dbGet('activityProjects',firstId)).project.items,project.items,'Migration preserves original booth layout');
@@ -66,12 +71,12 @@ try{
   await page.evaluate(()=>{window.originalPut=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(){throw new DOMException('模拟空间不足','QuotaExceededError');};});
   await createActivity('存储失败','base');await page.evaluate(()=>{IDBObjectStore.prototype.put=window.originalPut;delete window.originalPut;});
   assert.deepEqual(await page.evaluate(()=>projectIO.capture(false)),before);assert.equal((await dbGet('activities')).length,count,'Failed transaction leaves no partial activity');
-  await page.click(`[data-activity-export="${secondId}"]`);await idle();
+  await page.$eval(`[data-activity-export="${secondId}"]`,e=>e.closest('details').open=true);await page.click(`[data-activity-export="${secondId}"]`);await idle();
   let exported;const filename='深圳 ING 创意社区_NEED! FLEA 2027 春季.json';for(let i=0;i<50;i++){if((await readdir(dir)).includes(filename)){exported=JSON.parse(await readFile(join(dir,filename),'utf8'));break;}await new Promise(r=>setTimeout(r,100));}
   assert.equal(exported.items[0].label,'B8');assert.equal(exported.site.eventName,'NEED! FLEA 2027 春季');assert.equal(exported.cadFile.base64,cad.base64);
   await page.evaluate(()=>{const s=environmentUI.snapshot();s.objects[0].height=6;environmentUI.restore(s);render();});
   await page.$eval('#site-current details',e=>e.open=true);
-  await page.click('#site-update-base');await idle();
+  await page.$eval('#site-current-settings',e=>e.open=true);await page.click('#site-update-base');await idle();
   assert.equal((await dbGet('projects','fixture-site')).project.items.length,0);
   assert.equal((await dbGet('projects','fixture-site')).project.environment.objects[0].height,6);
   assert.equal((await dbGet('activityProjects',firstId)).project.environment.objects[0].height,4.2);
@@ -82,9 +87,9 @@ try{
   await page.click('[data-site-select="fixture-site"]');await idle();assert.equal(await page.$$eval('[data-activity-load]',e=>e.length),count);
   await load(secondId);await open();await page.$eval('#site-current details',e=>e.open=false);await page.$eval('#site-library-dialog',e=>e.scrollTop=0);
   await page.screenshot({path:join(dir,'site-activities.png')});
-  await page.setViewport({width:390,height:844});assert.ok(await page.$eval('#site-library-dialog',e=>e.getBoundingClientRect().width<=innerWidth));await page.screenshot({path:join(dir,'site-activities-mobile.png')});
+  await page.setViewport({width:390,height:844});assert.ok(await page.$eval('#site-library-dialog',e=>e.getBoundingClientRect().width<=innerWidth));await page.select('#site-mobile-select',(await dbGet('sites')).find(s=>s.id!=='fixture-site').id);assert.equal(await page.$$eval('[data-activity-load]',e=>e.length),1);await page.select('#site-mobile-select','fixture-site');assert.equal(await page.$$eval('[data-activity-load]',e=>e.length),count);assert.equal(await page.evaluate(()=>booths.items[0].label),'B8','Browsing another venue does not replace the current canvas');await page.screenshot({path:join(dir,'site-activities-mobile.png')});
   // Failed schema upgrades must leave v1 snapshots recoverable.
-  const context=await browser.createBrowserContext(),migrationPage=await context.newPage();
+  const context=await browser.createBrowserContext(),migrationPage=await context.newPage();await localOnly(migrationPage);
   await migrationPage.goto(process.env.NEEDFLEA_URL||'http://127.0.0.1:3002',{waitUntil:'networkidle0'});
   await migrationPage.evaluate(project=>new Promise((resolve,reject)=>{
     const r=indexedDB.open('needflea-site-library',1);r.onupgradeneeded=()=>{for(const n of ['sites','projects'])r.result.createObjectStore(n,{keyPath:'id'});};
@@ -110,7 +115,7 @@ try{
   assert.equal(dwgBase.cadFile.renderData.schema,'needflea-cad-render/1');
   const dwgActivity=(await dbGet('activities')).find(a=>a.siteId===dwgSite.id);
   assert.equal((await dbGet('activityProjects',dwgActivity.id)).project.cadFile.renderData.schema,'needflea-cad-render/1');
-  await page.click(`[data-activity-export="${dwgActivity.id}"]`);await idle();
+  await page.$eval(`[data-activity-export="${dwgActivity.id}"]`,e=>e.closest('details').open=true);await page.click(`[data-activity-export="${dwgActivity.id}"]`);await idle();
   const portableFilename=join(dir,'DWG 便携场地_活动备份.json');let portable;
   for(let i=0;i<50;i++){try{portable=JSON.parse(await readFile(portableFilename,'utf8'));break;}catch{}await new Promise(r=>setTimeout(r,100));}
   assert.ok(portable);

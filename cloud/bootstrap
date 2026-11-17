@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+export HOST=0.0.0.0
+export PORT="${FC_CUSTOM_LISTEN_PORT:-9000}"
+exec node server.mjs

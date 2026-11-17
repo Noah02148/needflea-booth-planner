@@ -37,6 +37,7 @@ export function createCloudServer(options = {}) {
   }
   return createServer(async (req, res) => {
     const origin = req.headers.origin;
+    let stage = 'request';
     res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
     const send = (status, value) => {
       let data = Buffer.from(JSON.stringify(value));
@@ -79,6 +80,7 @@ export function createCloudServer(options = {}) {
         send(200, { id, project: await store.readProject(row.hash) }); return;
       }
       if (path === '/commit' && req.method === 'POST') {
+        stage = 'decode';
         const change = await body(req); validateChange(change);
         const requestHash = createHash('sha256').update(JSON.stringify(change)).digest('hex');
         // A lost response can be retried with the same operation, never a new write.
@@ -94,9 +96,11 @@ export function createCloudServer(options = {}) {
         applyChange(current, change, Object.fromEntries(['projects','activityProjects'].map(kind => [kind, (change.changes[kind] || []).map(row => ({ id: row.id, hash: 'pending' }))])));
         for (const kind of ['projects', 'activityProjects']) {
           projectRows[kind] = [];
+          stage = `write-${kind}`;
           for (const row of change.changes[kind] || []) projectRows[kind].push({ id: row.id, hash: await store.writeProject(row.project) });
         }
         const next = { ...applyChange(current, change, projectRows), requestHash };
+        stage = 'commit';
         if (!await store.commit(next)) {
           const written = await store.revision(next.revision);
           if (written?.operationId === change.operationId && written.requestHash === requestHash) { send(200, written); return; }
@@ -107,7 +111,8 @@ export function createCloudServer(options = {}) {
       fail(404, '云端接口不存在。');
     } catch (error) {
       // Never return SDK errors containing credential headers, URLs or signatures.
-      send(error.expose ? error.status : 503, { error: error.expose ? error.message : '云端存储暂时不可用，请稍后重试；当前画布和本地数据仍保留。' });
+      const code = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(error.code || '') ? error.code : 'StorageError';
+      send(error.expose ? error.status : 503, { error: error.expose ? error.message : '云端存储暂时不可用，请稍后重试；当前画布和本地数据仍保留。', ...(!error.expose ? { code, stage } : {}) });
     }
   });
 }

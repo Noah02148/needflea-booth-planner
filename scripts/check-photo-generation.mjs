@@ -8,6 +8,10 @@ const dir = await mkdtemp(join(tmpdir(), 'needflea-scene-workflow-'));
 const browser = await puppeteer.launch({ headless:true, args:['--use-angle=swiftshader','--enable-unsafe-swiftshader'] });
 try {
   const page=await browser.newPage(); page.setDefaultTimeout(30000);
+  await page.setRequestInterception(true);
+  page.on('request', r => new URL(r.url()).pathname === '/cloud-config.js'
+    ? r.respond({status:200,contentType:'application/javascript',body:"window.NEEDFLEA_CLOUD_API_URL='';"})
+    : r.continue());
   await page.setViewport({width:1440,height:1000});
   const errors=[], retired=[];
   page.on('pageerror', e=>errors.push(e.message));

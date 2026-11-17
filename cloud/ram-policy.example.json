@@ -1,0 +1,21 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketVersioning"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"],
+      "Condition": {"StringLike": {"oss:Prefix": ["needflea/library/*"]}}
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetObject", "oss:PutObject", "oss:PutObjectAcl"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET/needflea/library/*"]
+    }
+  ]
+}

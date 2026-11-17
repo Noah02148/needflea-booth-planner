@@ -12,11 +12,12 @@
 
 NEED!FLEA 摊位规划工具：浏览器端 CAD 查看、场景图导入、摊位与设施标注、2D/等轴测预览和导出。
 
-- 前端是纯 HTML / JavaScript / Canvas，无框架、打包步骤、数据库或业务后端。
+- 前端是纯 HTML / JavaScript / Canvas，无框架、打包步骤或内置数据库；可选 OSS 云端接口在 `cloud/` 单独部署，不能把 GitHub Pages 发布当作后端已上线。
 - `index.html`：页面、内联样式、事件入口和脚本引用。
 - `toolbar.js` / `toolbar.css`：顶部四个功能分组与响应式布局，保留原控件 ID / 内联事件。切换分组不得调用 setTool 或重置参数；setTool 通过 `needflea-tool-changed` 事件同步分组与当前工具提示。保存、统一场景搭建入口及选择工具保持可见；选择场地放在场地与文件分组，二维 / 三维切换放在场景侧栏，不恢复独立 3D 顶部按钮。改动后运行 `node scripts/check-toolbar.mjs` 并查看桌面 / 窄屏截图。
 - `app.js`：主控制器，负责导入、交互、图层、比例尺、保存/载入、自动保存和导出。
 - `site-library.js` / `site-library.css`：浏览器本地场地 / 多活动库。通过 `window.projectIO.capture/load/setSite` 复用项目逻辑；IndexedDB `needflea-site-library` v2 的 `sites` / `projects` 保存场地元数据 / 不含摊位的基础，`activities` / `activityProjects` 保存按 siteId 归属的活动元数据 / 独立完整项目。相关写入同事务提交。不要把完整 CAD / 照片塞进 localStorage。
+- `site-cloud.js` / `cloud-config.js` / `cloud/`：可选的团队 OSS 场地库。公开配置只有 HTTPS API 地址；OSS 凭证、密码散列和会话密钥只能留在服务端 / 仓库外。配置团队接口后默认打开云端；本地库收在「更多管理 → 浏览本机场地」，保留离线使用及历史数据迁移，且不受云端故障影响。未配置接口时默认本地；云端保存失败不得自动降级为本地成功。索引条件创建依赖未启用版本控制的专用 Bucket，不能替用户关闭已有 Bucket 的版本控制。并发冲突保留当前画布；不明结果重用原操作 ID。整库上传保留原本地库、同名创建副本、相同迁移去重。部署步骤见 `cloud/README.md`。
 - `dxf-parser.js`：ASCII DXF 解析器，定义 `DXFParser`。
 - `renderer.js`：`DXFRenderer`，负责视口、CAD/SVG/图片底图渲染与坐标转换。
 - `booth.js`：`BoothSystem`，负责标注、摊位几何、样式、颜色及 DXF 导出。
@@ -75,8 +76,10 @@ node dwg-server.mjs
 - 延续现有 JavaScript 风格：两空格缩进、分号、类与普通函数；局部修改遵循相邻代码，不做全文件格式化。
 - 界面文案主要为中文，保留现有操作名称和工作流。
 - CAD 世界坐标 Y 向上，Canvas/SVG 屏幕坐标 Y 向下。沿用现有坐标转换；真实米数 = 世界单位 × `metersPerUnit`。
-- 摊位新建与载入的 height 统一为 2.5 米（帐篷含屋顶总高），空地不生成立体体块；二维与三维必须共用 placeLayoutItem 的尺寸、吸附和避让逻辑。活动组件右键点击删除，三维右键拖动不得误删；射线区分摊位与环境 ID。相关回归运行 `node scripts/check-layout-components.mjs`。
+- 摊位新建与载入的 height 统一为 2.5 米（结构总高），空地不生成立体体块；二维与三维必须共用 placeLayoutItem 的尺寸、吸附和避让逻辑。活动组件右键点击删除，三维右键拖动不得误删；射线区分摊位与环境 ID。相关回归运行 `node scripts/check-layout-components.mjs`。
 - 摊位位置/尺寸使用 `wx`、`wy`、`ww`、`wh`，旋转 `angle` 为绕中心的角度。修改几何时对照 `BoothSystem` 的实现，保持命中检测、吸附、2D、等轴测和导出一致。
+- 三维 WASD 仅在三维画布聚焦且可见时控制相机，沿当前视角的水平面平移相机及轨道目标，不改变高度、朝向、场景物体或已保存机位。失焦、页面隐藏及切回二维时取消动画并清除按键；不劫持输入框或 Ctrl / Cmd / Alt 快捷键。运行 `node scripts/check-scene-navigation.mjs` 验证。
+- 二维文字、动线、尺寸和线条在 Three.js 中使用贴地标注，不得作为无深度测试的悬浮白底牌；保留字号比例、虚线、闭合和尺寸端点刻度。标注用 environment.showAnnotations 独立控制，旧项目默认显示，不影响原 items；CAD / 图片底图文字仍属于底图。运行 `node scripts/check-3d-annotations.mjs` 验证坐标、透明背景、遮挡和保存恢复。
 - 颜色优先通过 `booths.catColor(cat)` 读取，保留未知分类的兜底，避免载入不同分类的项目后崩溃。
 - 保存格式为 `version: 3`，含 `cadFile`、`categories`、`items`、比例尺、视口、图层及 `venue`；保持现有项目的载入兼容。
 - DWG 项目通过 `cadFile.renderData`（`needflea-cad-render/1`）保存原精度解析底图，场地库 `capture(false)` 也必须携带；载入优先用解析底图，旧 v3 可由 `venue` 恢复，均不得请求 DWG 服务。仅无解析底图的旧项目回退原始 DWG 路径。运行 `node scripts/check-portable-project.mjs` 验证，个人 JSON 样本不入库。
@@ -88,6 +91,8 @@ node dwg-server.mjs
 - `.gitignore` 忽略 `node_modules/`、`test-*.png`、`test-*.svg`、`test-*.mjs`；部分旧测试图片已被跟踪。提交前检查新增测试是否被忽略，不把本机样本、截图或临时产物混入变更。
 
 ## 验证方式
+
+云端库变更运行 `node scripts/check-cloud-library.mjs`（默认 3002，可用 NEEDFLEA_URL 更换）。它运行真实 OSS 适配器和原子模拟存储，检查鉴权 / CORS、资源去重、并发冲突、幂等重试、重启恢复、本地迁移、双浏览器共享、登录恢复及移动端；不连接真实 OSS、不使用用户浏览器数据。准备发布时运行 `node scripts/package-cloud.mjs`，包使用源文件白名单，不打包 .env 或用户数据。真实 Bucket、地域、FC 接口 / 角色缺失时须明确未完成真实部署验收。
 
 CAD 导入 / 文字 / 块变更运行 `node scripts/check-cad-import.mjs`（3002 静态服务）。`cad-text.js` 共享 GBK / Unicode / CAD 转义处理、MTEXT 正文及换行和文字布局；不能把真实 Unicode 截断为低字节，不能删掉格式括号内正文或统一放大小字。DXFParser 输出递归展开后的世界坐标叶实体，保留 sourceLayers 父层可见性链；textTransform 保留块变换后的文字基向量。OCS / elevation 必须在块变换前处理，图层初始状态遵循 off / frozen，用户开关可覆盖。normalized venue 的文字可携带可选 textTransform / widthScale / textWidth / attachment / hAlign / vAlign / textGen / lineSpacing，原 v3 结构保持兼容。可选 NEEDFLEA_DWG_FILE 指向演艺中心真实样本，依赖 ODA 本地服务，样本不得入库。
 
