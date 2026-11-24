@@ -101,6 +101,7 @@ let _isoRenderer = null;
 let _3dMode = false;
 
 // Raw CAD file data for saving
+let planningData;
 let _siteInfo = null; // Optional portable venue name and activity note.
 let _cadFileData = null; // { name, base64 }
 
@@ -146,6 +147,7 @@ function render() {
   updateStatusBar();
   updateStats();
   window.environmentUI?.drawPhotoMarkers(ctx, renderer);
+  window.plannerUI?.draw(ctx, renderer);
 }
 
 function _drawEraserMarks() {
@@ -1276,13 +1278,14 @@ function onDXFParsed(dxfData) {
     alert('文件解析完成，但未找到任何图形实体。\n请确认文件包含有效的 CAD 图形数据。');
     return;
   }
+  planningData = undefined; window.plannerUI?.newBase();
   window.environmentUI?.clearMeasuredBase();
   renderer.load(dxfData);
   _setupDxfLayerState(dxfData);
   dxfLoaded = true;
   document.getElementById('welcome').classList.add('hidden');
   document.getElementById('btn-calib').disabled = false;
-  metersPerUnit = null;
+  metersPerUnit = dxfData.metersPerUnit || null;
   updateScaleInfo();
   setTool('select');
   render();
@@ -1300,6 +1303,7 @@ function _clearAnnotationsIfNeeded() {
 }
 
 function onSvgLoaded() {
+  planningData = undefined; window.plannerUI?.newBase();
   window.environmentUI?.clearMeasuredBase();
   dxfLoaded = true;
   document.getElementById('welcome').classList.add('hidden');
@@ -1361,17 +1365,6 @@ async function loadDWGFile(file) {
 
           onDXFParsed(dxfData);
 
-          // Auto-detect units from DXF header $INSUNITS (must be AFTER onDXFParsed which resets metersPerUnit)
-          const insUnitsMap = { 1: 0.0254, 2: 0.3048, 3: 1609.344, 4: 0.001, 5: 0.01, 6: 1.0, 7: 1000.0 };
-          const insMatch = dxfText.match(/\$INSUNITS[\s\S]*?70\s*\n\s*(\d+)/);
-          if (insMatch) {
-            const insVal = parseInt(insMatch[1]);
-            if (insUnitsMap[insVal]) {
-              metersPerUnit = insUnitsMap[insVal];
-              updateScaleInfo();
-              console.log('Auto scale from INSUNITS=' + insVal + ' → metersPerUnit=' + metersPerUnit);
-            }
-          }
           parsed = true;
         } catch (odaErr) {
           console.error('ODA fallback failed:', odaErr);
@@ -1447,6 +1440,7 @@ function loadImageFile(file) {
 
     const img = new Image();
     img.onload = () => {
+      planningData = undefined; window.plannerUI?.newBase();
       window.environmentUI?.clearMeasuredBase();
       renderer.loadImageBackground(img);
       dxfLoaded = true;
@@ -2837,6 +2831,17 @@ function portableProject(data) {
   return result;
 }
 
+async function recoverDwgScale(buffer) {
+  const worker = new Worker('dwg-units-worker.js');
+  try {
+    return await new Promise(resolve => {
+      worker.onmessage = event => resolve(DXFParser.metersPerUnit(event.data));
+      worker.onerror = () => resolve(null);
+      worker.postMessage(buffer, [buffer]);
+    });
+  } finally { worker.terminate(); }
+}
+
 async function _restorePortableCad(cadFile, venue) {
   const saved = cadFile.renderData;
   const portable = saved?.schema === 'needflea-cad-render/1';
@@ -2873,6 +2878,7 @@ function captureProject(includeVenue = true) {
   const data = {
     version: 3,
     site: _siteInfo ? { ..._siteInfo } : undefined,
+    planning: window.plannerUI?.snapshotSettings ? window.plannerUI.snapshotSettings() : planningData,
     environment: window.environmentUI ? window.environmentUI.snapshot() : undefined,
     cadFile: _portableCadFile(),
     categories: booths.CAT_COLORS,
@@ -2898,7 +2904,7 @@ function saveProject() {
   link.href = URL.createObjectURL(blob);
   link.click();
   URL.revokeObjectURL(link.href);
-  document.getElementById('tool-hint').textContent = '项目已保存';
+  document.getElementById('tool-hint').textContent = planningData ? '项目已保存（含摊位初稿设置）' : '项目已保存';
 }
 
 async function applyProjectData(data) {
@@ -2906,6 +2912,18 @@ async function applyProjectData(data) {
   let inferredMetersPerUnit = null;
   // Validate the optional environment before changing the current project.
   const loadedEnvironment = window.environmentUI?.validate(data.environment);
+  if (data.planning != null) {
+    const plan = data.planning;
+    const pt = p => p && Number.isFinite(p.x) && Number.isFinite(p.y);
+    const poly = points => Array.isArray(points) && points.length >= 3 && points.every(pt);
+    if (typeof plan !== 'object' || Array.isArray(plan) ||
+        (plan.regions != null && (!Array.isArray(plan.regions) || !plan.regions.every(r => r && poly(r.points)))) ||
+        (plan.obstacles != null && (!Array.isArray(plan.obstacles) || !plan.obstacles.every(poly))) ||
+        (plan.demands != null && (!Array.isArray(plan.demands) || !plan.demands.every(d => d && typeof d === 'object'))) ||
+        (plan.zones != null && (!Array.isArray(plan.zones) || !plan.zones.every(z=>z && poly(z.points) && typeof z.passable==='boolean'))) ||
+        [plan.entrances,plan.exits].some(gs=>gs!=null && (!Array.isArray(gs) || !gs.every(g=>pt(g?.center) && ((g.a==null && g.b==null) || (pt(g.a) && pt(g.b)))))) ||
+        [plan.entrance, plan.exit].some(p => p != null && !pt(p))) throw new Error('项目的规划标注格式无效');
+  }
   if (loadedEnvironment?.sitePlan && !data.cadFile?.base64 && data.metersPerUnit !== 1) throw new Error('实测场地必须使用米制比例尺');
   if (_3dMode && window.environmentUI) window.environmentUI.close();
 
@@ -2934,19 +2952,24 @@ async function applyProjectData(data) {
       populateLayerPanel();
     } else {
 
-    const binary = atob(data.cadFile.base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    function originalBytes() {
+      if (Uint8Array.fromBase64) return Uint8Array.fromBase64(data.cadFile.base64);
+      const binary = atob(data.cadFile.base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
     const ext = (data.cadFile.name || '').split('.').pop().toLowerCase();
 
     if (ext === 'dwg' && await _restorePortableCad(data.cadFile, data.venue)) {
       dxfLoaded = true;
-      inferredMetersPerUnit = data.venue?.metersPerUnit || null;
+      inferredMetersPerUnit = data.cadFile.renderData?.dxf?.metersPerUnit || data.venue?.metersPerUnit || null;
+      if (!data.metersPerUnit && !inferredMetersPerUnit) inferredMetersPerUnit = await recoverDwgScale(originalBytes().buffer);
       document.getElementById('welcome').classList.add('hidden');
       document.getElementById('btn-calib').disabled = false;
     } else if (ext === 'dwg') {
       // Parse DWG: try libdxfrw first, then ODA fallback
-      const ab = bytes.buffer;
+      const ab = originalBytes().buffer;
       let dwgLoaded = false;
       try {
         const result = await parseDWGtoSVG(ab);
@@ -2967,6 +2990,7 @@ async function applyProjectData(data) {
         try {
           const dxfText = await convertDWGtoDXF(ab, data.cadFile.name);
           const dxfData = parser.parse(dxfText);
+          inferredMetersPerUnit = dxfData.metersPerUnit;
           renderer.load(dxfData);
           _setupDxfLayerState(dxfData);
           dwgLoaded = true;
@@ -2982,8 +3006,9 @@ async function applyProjectData(data) {
       }
     } else {
       // Parse DXF
-      const content = CADText.readBytes(bytes);
+      const content = CADText.readBytes(originalBytes());
       const dxfData = parser.parse(content);
+      inferredMetersPerUnit = dxfData.metersPerUnit;
       renderer.load(dxfData);
       _setupDxfLayerState(dxfData);
       dxfLoaded = true;
@@ -3016,6 +3041,7 @@ async function applyProjectData(data) {
     renderLegend();
   }
   // Restore annotations
+  planningData = structuredClone(data.planning);
   window.environmentUI?.restore(loadedEnvironment);
   booths.items = (data.items || []).map(item => item.type === 'booth' ? { ...item, height: 2.5 } : item);
   booths.nextId = data.nextId || (booths.items.length ? Math.max(...booths.items.map(i => i.id)) + 1 : 1);
@@ -3057,6 +3083,7 @@ async function loadProject(input) {
 }
 window.projectIO = {
   capture: captureProject,
+  captureForLibrary: () => captureProject(!/\.dwg$/i.test(_cadFileData?.name || '')),
   portable: portableProject,
   load: applyProjectData,
   setSite(info) { _siteInfo = info ? { name: String(info.name || '').slice(0, 100), eventName: String(info.eventName || '').slice(0, 200) } : null; },

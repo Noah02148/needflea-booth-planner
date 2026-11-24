@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const cloud = fileURLToPath(new URL('../cloud/', import.meta.url));
-const files = ['bootstrap', 'server.mjs', 'contract.mjs', 'oss-store.mjs', 'package.json', 'package-lock.json', 'node_modules'];
+const files = ['bootstrap', 'server.mjs', 'contract.mjs', 'oss-store.mjs', 'planning-model.mjs', 'planning-input.mjs', 'planning-geometry.mjs', 'planning-agent.mjs', 'planning-knowledge.mjs', 'package.json', 'package-lock.json', 'node_modules'];
 try {
   for (const name of files) await access(join(cloud, name));
   const directory = await mkdtemp(join(tmpdir(), 'needflea-cloud-deploy-')), archive = join(directory, 'needflea-cloud.zip');

@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { applyChange, fail, stores, validId, validateChange } from './contract.mjs';
 import { configuredOSS } from './oss-store.mjs';
 
+import { runPlanner } from './planning-agent.mjs';
+import { syncKnowledge } from './planning-knowledge.mjs';
+
 const scrypt = promisify(scryptCallback), MAX = 100 * 1024 * 1024, WIRE_MAX = 24 * 1024 * 1024;
 export async function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 256) throw new Error('云端密码须为 12～256 个字符。');
@@ -70,14 +73,33 @@ export function createCloudServer(options = {}) {
       }
       authenticate(req);
       const store = getStore(req);
+      if (path === '/planner/run' && req.method === 'POST') {
+        stage = 'planner';
+        send(200, await runPlanner({ store, env, secret, body: await body(req, 8*1024*1024), fetcher: options.responsesFetch }));
+        return;
+      }
+      if (path === '/planner/sync' && req.method === 'POST') {
+        const index = await syncKnowledge(store, env);
+        send(200, { schema: index.schema, revision: index.revision, records: index.records.length, policy: index.policy });
+        return;
+      }
       if (path === '/library' && req.method === 'GET') { send(200, await store.latest()); return; }
+      const chunk = path.match(/^\/cad-chunk\/([a-f0-9]{64})$/);
+      if (chunk && req.method === 'POST') {
+        const {data} = await body(req, 3*1024*1024);
+        if (typeof data!=='string') fail(400,'底图片段无效。');
+        await store.putCadChunk(chunk[1],Buffer.from(data,'base64')); send(200,{ok:true}); return;
+      }
+      if (chunk && req.method === 'GET') {
+        send(200,{data:(await store.getCadChunk(chunk[1])).toString('base64')}); return;
+      }
       const match = path.match(/^\/project\/(projects|activityProjects)\/([^/]+)\/(\d+)$/);
       if (match && req.method === 'GET') {
         const [, kind, encoded, revision] = match, id = decodeURIComponent(encoded);
         if (!validId(id) || !Number.isSafeInteger(Number(revision))) fail(400, '项目编号无效。');
         const manifest = await store.revision(Number(revision)), row = manifest?.[kind]?.find(row => row.id === id);
         if (!row) fail(404, '云端项目不存在，请刷新场地库。');
-        send(200, { id, project: await store.readProject(row.hash) }); return;
+        send(200, { id, project: await store.readProject(row.hash,new URL(req.url,'http://cloud.local').searchParams.get('chunks')==='1') }); return;
       }
       if (path === '/commit' && req.method === 'POST') {
         stage = 'decode';
@@ -94,12 +116,30 @@ export function createCloudServer(options = {}) {
         const projectRows = {};
         // Validate all references before uploading any project assets.
         applyChange(current, change, Object.fromEntries(['projects','activityProjects'].map(kind => [kind, (change.changes[kind] || []).map(row => ({ id: row.id, hash: 'pending' }))])));
+        const verifiedCad = new Set();
         for (const kind of ['projects', 'activityProjects']) {
           projectRows[kind] = [];
           stage = `write-${kind}`;
-          for (const row of change.changes[kind] || []) projectRows[kind].push({ id: row.id, hash: await store.writeProject(row.project) });
+          for (const row of change.changes[kind] || []) {
+            if (row.project.cloudCadChunks) {
+              const signature = JSON.stringify(row.project.cloudCadChunks);
+              if (!verifiedCad.has(signature)) { await store.verifyCadChunks(row.project.cloudCadChunks); verifiedCad.add(signature); }
+            }
+            projectRows[kind].push({ id: row.id, hash: await store.writeProject(row.project) });
+          }
         }
         const next = { ...applyChange(current, change, projectRows), requestHash };
+        // An older client may echo a final flag during an ordinary layout save.
+        // Bind a publication to that explicit action, never to later edits.
+        for (const row of projectRows.activityProjects) {
+          const previous = current.activities.find(a => a.id === row.id);
+          const activity = next.activities.find(a => a.id === row.id);
+          const oldHash = current.activityProjects.find(a => a.id === row.id)?.hash;
+          if (oldHash !== row.hash && previous?.status === 'final' && activity?.status === 'final' && previous.finalToken === activity.finalToken) {
+            const i = next.activities.indexOf(activity);
+            next.activities[i] = { ...activity, status: 'draft', finalToken: null };
+          }
+        }
         stage = 'commit';
         if (!await store.commit(next)) {
           const written = await store.revision(next.revision);

@@ -10,7 +10,14 @@
     if (url.username || url.password || url.search || url.hash || !(url.protocol === 'https:' || url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) throw new Error('云端接口需使用 HTTPS；本机调试可使用 localhost。');
     return url.href.replace(/\/$/, '');
   }
-  function remember() { if (session) sessionStorage.setItem(savedKey, JSON.stringify(session)); else sessionStorage.removeItem(savedKey); }
+  const knownChunks = new Set();
+  let cachedCad = null;
+  function remember() {
+    knownChunks.clear();
+    cachedCad = null;
+    if (session) sessionStorage.setItem(savedKey, JSON.stringify(session));
+    else sessionStorage.removeItem(savedKey);
+  }
   function connected() {
     if (!session || session.expiresAt <= Date.now()) return false;
     try { return !window.NEEDFLEA_CLOUD_API_URL || session.url === validateURL(window.NEEDFLEA_CLOUD_API_URL); }
@@ -24,12 +31,12 @@
     if (value !== undefined) {
       headers['Content-Type'] = 'application/json';
       const raw = new Blob([JSON.stringify(value)]);
-      if (raw.size > 100*1024*1024) throw new Error('本次数据超过 100 MB，请拆分场地迁移或减少照片。');
+      if (raw.size > 100*1024*1024) throw Object.assign(new Error('本次数据超过 100 MB，请拆分场地迁移或减少照片。'), {status:413});
       if (raw.size > 4096 && typeof CompressionStream !== 'undefined') {
         options.body = await new Response(raw.stream().pipeThrough(new CompressionStream('gzip'))).blob();
         headers['Content-Encoding'] = 'gzip';
       } else options.body = raw;
-      if (options.body.size > 24*1024*1024) throw new Error('上传数据超过 24 MB，请减少照片或分批迁移场地。');
+      if (options.body.size > 24*1024*1024) throw Object.assign(new Error('上传数据超过 24 MB，请减少照片或分批迁移场地。'), {status:413});
     }
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 120000); options.signal = controller.signal;
     try {
@@ -51,11 +58,67 @@
     manifest = value; return value;
   }
   async function refresh() { const next = accept(await request('/library')); requestPending = null; return next; }
+  const chunkSize = 2 * 1024 * 1024;
+  const hashBytes = async bytes => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2,'0')).join('');
+  async function stageCad(changes) {
+
+    for (const kind of ['projects','activityProjects']) {
+      for (const row of changes[kind] || []) {
+        const cad = row.project.cadFile;
+        if (!cad || !/\.dwg$/i.test(cad.name)) continue;
+        const blob = new Blob([JSON.stringify(cad)]);
+        if (blob.size < chunkSize) continue;
+        const chunks = [];
+        for (let start = 0; start < blob.size; start += chunkSize) {
+          const bytes = new Uint8Array(await blob.slice(start,start+chunkSize).arrayBuffer());
+          const hash = await hashBytes(bytes);
+          if (!knownChunks.has(hash)) {
+            let binary = '';
+            for (let i=0;i<bytes.length;i+=32768) binary += String.fromCharCode(...bytes.subarray(i,i+32768));
+            try { await request('/cad-chunk/'+hash, {data:btoa(binary)}); }
+            catch (error) {
+              if (error.status === 404) throw new Error('云端服务尚未部署大底图分块保存功能。');
+              throw error;
+            }
+            knownChunks.add(hash);
+          }
+          chunks.push(hash);
+        }
+        cachedCad = {key: chunks.join(','), blob};
+        row.project = {...row.project, cadFile:null, cloudCadChunks:chunks};
+      }
+    }
+  }
+  async function readCloudProject(path) {
+    const row = await request(path+'?chunks=1');
+    const hashes = row.project?.cloudCadChunks;
+    if (hashes) {
+      const key = hashes.join(',');
+      if (cachedCad?.key !== key) {
+        const parts = [];
+        for (let start = 0; start < hashes.length; start += 6) {
+          parts.push(...await Promise.all(hashes.slice(start, start + 6).map(async hash => {
+            const {data} = await request('/cad-chunk/' + hash);
+            const bytes = Uint8Array.fromBase64 ? Uint8Array.fromBase64(data) : Uint8Array.from(atob(data), c => c.charCodeAt(0));
+            if (await hashBytes(bytes) !== hash) throw new Error('云端底图片段校验失败。');
+            knownChunks.add(hash);
+            return bytes;
+          })));
+        }
+        cachedCad = {key, blob: new Blob(parts)};
+      }
+      row.project.cadFile = JSON.parse(await cachedCad.blob.text());
+      delete row.project.cloudCadChunks;
+    }
+    return row;
+  }
   async function commit(changes) {
     // Retain the operation ID after network failure: a retry confirms that exact save.
+    const expectedRevision = manifest.revision;
+    await stageCad(changes);
     const fingerprint = JSON.stringify(changes);
     if (requestPending && requestPending.fingerprint !== fingerprint) throw new Error('上次云端保存结果尚未确认，请先重试保存或刷新云端，再进行其他修改。');
-    requestPending ||= { fingerprint, payload: { expectedRevision: manifest.revision, operationId: crypto.randomUUID(), changes } };
+    requestPending ||= { fingerprint, payload: { expectedRevision, operationId: crypto.randomUUID(), changes } };
     try {
       const next = accept(await request('/commit', requestPending.payload)); requestPending = null; return next;
     } catch (error) {
@@ -65,6 +128,7 @@
     }
   }
   window.venueCloud = {
+    plan: payload => request('/planner/run', payload),
     configuredURL: configURL,
     connected,
     revision: () => manifest?.revision,
@@ -100,7 +164,7 @@
         return {
           getAll() { return { result: structuredClone(manifest[name]) }; },
           get(id) {
-            if (name === 'projects' || name === 'activityProjects') return { promise: request(`/project/${name}/${encodeURIComponent(id)}/${revision}`) };
+            if (name === 'projects' || name === 'activityProjects') return { promise: readCloudProject(`/project/${name}/${encodeURIComponent(id)}/${revision}`) };
             return { result: structuredClone(manifest[name].find(row => row.id === id)) };
           },
           put(row) { if (mode !== 'readwrite') throw new Error('场地库当前不可写。'); (changes[name] ||= []).push(structuredClone(row)); },

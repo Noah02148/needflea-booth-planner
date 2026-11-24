@@ -15,6 +15,10 @@ let versionStatus = '', writes = 0, putFailure = null;
 const fake = {
   options: { bucket: 'test-bucket' },
   async getBucketVersioning(name) { assert.equal(name, 'test-bucket'); return { versionStatus }; },
+  async head(name) {
+    if (!objects.has(name)) throw Object.assign(new Error('missing'), {status:404});
+    return {};
+  },
   async get(name) { if (!objects.has(name)) throw Object.assign(new Error('missing'), {code:'NoSuchKey'}); return {content:Buffer.from(objects.get(name))}; },
   async put(name, bytes, opts) {
     if (putFailure) throw putFailure;
@@ -65,6 +69,25 @@ try {
   const before = writes, invalid={expectedRevision:2,operationId:randomUUID(),changes:{activities:[{id:'orphan',siteId:'missing',name:'孤立活动',createdAt:now,updatedAt:now}]}};
   assert.equal((await send(invalid)).status,400); assert.equal(writes,before);
   const reopened=ossStore(fake); assert.equal((await reopened.latest()).revision,2,'State survives backend restart');
+  const seedDeletion={expectedRevision:2,operationId:randomUUID(),changes:{sites:[{id:'keep-site',name:'保留场地',createdAt:now,updatedAt:now}],projects:[{id:'keep-site',project}],activities:[{id:'remove-event',siteId:'http-test',name:'示例活动',createdAt:now,updatedAt:now}],activityProjects:[{id:'remove-event',project:updated}]}};
+  assert.equal((await send(seedDeletion)).status,200);
+  const priorDeletion=await store.latest(),keep=priorDeletion.projects.find(p=>p.id==='keep-site');
+  const deletion={expectedRevision:3,operationId:randomUUID(),changes:{},deletions:{sites:['http-test'],projects:['http-test'],activities:['remove-event'],activityProjects:['remove-event']}};
+  const orphanDeletion={...deletion,deletions:{sites:['http-test']}};
+  assert.equal((await send(orphanDeletion)).status,400,'Deletion must not leave orphaned activities or projects');
+  const badDeletion={...deletion,deletions:{sites:['http-test','http-test']}};
+  assert.equal((await send(badDeletion)).status,400);
+  assert.equal((await send({...deletion,deletions:{unknown:['http-test']}})).status,400);
+  assert.equal((await send({...deletion,deletions:{sites:null}})).status,400);
+  assert.equal((await send({...deletion,deletions:{sites:['missing']}})).status,404);
+  assert.equal((await store.latest()).revision,3,'Invalid deletion cannot publish an index');
+  const removed=await send(deletion);assert.equal(removed.status,200);assert.equal(removed.data.revision,4);
+  assert.deepEqual(removed.data.sites.map(s=>s.id),['keep-site']);assert.deepEqual(removed.data.projects,[keep]);
+  assert.equal(removed.data.activities.length,0);assert.equal(removed.data.activityProjects.length,0);
+  assert.deepEqual(await store.readProject(keep.hash),project,'Other venue data remains intact');
+  assert.deepEqual(await store.revision(3),priorDeletion,'Immutable history remains available for recovery');
+  assert.equal((await send(deletion)).data.revision,4,'Deletion retries reuse the same revision');
+  assert.equal((await send({...deletion,operationId:randomUUID()})).status,409,'Stale deletion cannot overwrite newer edits');
   versionStatus='Enabled';await assert.rejects(()=>ossStore(fake).latest(),/版本控制/);versionStatus='';
   objects.clear();
   const errors = [], dir = await mkdtemp(join(tmpdir(),'needflea-cloud-library-'));
@@ -148,6 +171,59 @@ try {
   await p4.click(`[data-site-select="${newSite}"]`);await idle(p4);await load(p4,created);
   assert.equal(await p4.evaluate(()=>booths.items[0].label),'已提交但响应丢失','Cloud-created venue and layout are available to a fresh device');
   await open(p4);await p4.screenshot({path:join(dir,'team-library.png')});await p4.setViewport({width:390,height:900});await p4.screenshot({path:join(dir,'team-library-mobile.png')});await p4.setViewport({width:1440,height:1100});
+  if (process.env.NEEDFLEA_DWG_FILE) {
+    p4.setDefaultTimeout(240000);
+    await p4.$eval('#site-create-details',e=>e.open=true);
+    await p4.type('#site-name','真实 DWG 验收'); await p4.type('#site-event','首个活动');
+    await (await p4.$('#site-file')).uploadFile(process.env.NEEDFLEA_DWG_FILE);
+    await p4.click('#site-create'); await idle(p4);
+    const manifest=await store.latest(), venue=manifest.sites.find(s=>s.name==='真实 DWG 验收');
+    assert.ok(venue,await p4.$eval('#site-message',e=>e.textContent));
+    const activity=manifest.activities.find(a=>a.siteId===venue.id);
+    const base=await store.readProject(manifest.projects.find(p=>p.id===venue.id).hash,true);
+    const saved=await store.readProject(manifest.activityProjects.find(p=>p.id===activity.id).hash,true);
+    assert.deepEqual(base.cloudCadChunks,saved.cloudCadChunks); assert.ok(saved.cloudCadChunks.length>1);
+    await p4.reload({ waitUntil:'networkidle0' });
+    await open(p4);
+    await p4.click(`[data-site-select="${venue.id}"]`); await idle(p4);
+    await p4.evaluate(() => {
+      window.chunkRequests = 0;
+      window.fetch = new Proxy(window.fetch, {apply(fn, self, args) {
+        if (String(args[0]).includes(':3001')) throw new Error('重新载入不应调用 DWG server');
+        if (String(args[0]).includes('/cad-chunk/')) window.chunkRequests++;
+        return Reflect.apply(fn, self, args);
+      }});
+    });
+    await load(p4,activity.id);
+    assert.ok(await p4.evaluate(()=>projectIO.capture(false).cadFile.renderData));
+    p4.removeAllListeners('request');
+    await p4.setRequestInterception(false);
+    console.log('PASS cold CAD load');
+    const coldRequests = await p4.evaluate(() => window.chunkRequests);
+    assert.equal(coldRequests, saved.cloudCadChunks.length);
+    if (process.env.NEEDFLEA_EXPECT_SCALE) {
+      const scale = Number(process.env.NEEDFLEA_EXPECT_SCALE);
+      assert.equal(saved.metersPerUnit, scale);
+      assert.equal(base.metersPerUnit, scale);
+      console.log('PASS imported units');
+      const restored = await p4.evaluate(async () => {
+        const legacy = projectIO.capture(false);
+        legacy.metersPerUnit = null;
+        delete legacy.cadFile.renderData.dxf.metersPerUnit;
+        await projectIO.load(legacy);
+        return metersPerUnit;
+      });
+      assert.equal(restored, scale, 'Legacy DWG scale recovered offline');
+      console.log('PASS legacy scale');
+      await open(p4); await load(p4,activity.id);
+    }
+    await open(p4);
+    const revisionBeforeSave = (await store.latest()).revision;
+    await p4.click('#site-update'); await idle(p4);
+    assert.equal((await store.latest()).revision, revisionBeforeSave + 1, await p4.$eval('#site-message', e => e.textContent));
+    assert.equal(await p4.evaluate(() => window.chunkRequests), coldRequests, 'Same CAD reload and layout save reuse verified chunks');
+    console.log('PASS real DWG create, reload and save; shared chunks:',saved.cloudCadChunks.length);
+  }
   await p4.click('#site-cloud-more > summary');await p4.click('#site-cloud-logout');await idle(p4);assert.equal(await p4.$eval('#site-cloud-form',e=>e.hidden),false);
   await p4.reload({waitUntil:'networkidle0'});await open(p4);assert.equal(await p4.$eval('#site-storage-cloud',e=>e.getAttribute('aria-pressed')),'true');
   await ctx3.close();await ctx4.close();

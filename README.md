@@ -290,3 +290,11 @@ node scripts/check-codex-environment.mjs --live
 ```
 
 真实连通测试只验证订阅登录、图片输入和结构化输出，不代表真实场地识别精度；后者需用现场照片验证。
+
+### 生成摊位初稿
+
+在顶部打开「生成摊位初稿」。圈出可摆区域和禁摆区域，分别点击门洞的两个端点设置入口、出口。禁摆区可以允许行人通行，柱子等实体应设为不可通行。没有禁摆区时可直接确认。保存项目 JSON 或活动时，一并记录标注、通行属性、各类型摊位尺寸、数量区间和最小过道净宽。出入口是动线参考和避让标记，不以门洞宽度限制过道。
+
+「生成两种初稿」在浏览器后台比较有限的一组排法。A 优先沿两侧边界连续排布、营业面朝内，B 优先通行。过道只设置最小净宽。只有一版合适时只显示一版。切换或取消预览保留当前画布；采用后在场地库创建活动副本，可继续调整并保存。侧栏的「撤销整版采用」可一次移除本次加入的摊位。
+
+运行 `node scripts/check-continuous-rows.mjs`、`node scripts/check-wall-layout.mjs`、`node scripts/check-gate-markers.mjs` 和 `node scripts/check-planner-settings.mjs` 验证连续排布、沿墙朝向、出入口与 JSON 设置恢复。可用 `NEEDFLEA_CONTINUITY_PROJECT` 指定水立方备份运行 `scripts/check-current-layout.mjs`，在隔离浏览器中验证真实底图。默认网页地址为本机 3005。`check-local-drafts.mjs` 保留早期门洞规则的历史断言，不作为当前版本验收入口。

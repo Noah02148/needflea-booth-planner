@@ -15,7 +15,7 @@
 
     </section>
     <div id="site-library-content">
-    <section id="site-current" hidden><div class="site-current-main"><div><small class="site-eyebrow">正在编辑</small><h3 id="site-current-title">当前画布</h3><p id="site-save-note" class="site-note"></p></div><button id="site-update">保存当前活动</button></div><details id="site-current-settings"><summary>备份与设置</summary><button id="site-export-current">下载当前项目 JSON</button><label>所属场地<input id="site-current-name" maxlength="100"></label><label id="site-current-event-label">当前活动名称<input id="site-current-event" maxlength="200"></label><p id="site-current-kind" class="site-note"></p><button id="site-update-base">保存场地基础（不含摊位）</button></details></section>
+    <section id="site-current" hidden><div class="site-current-main"><div><small class="site-eyebrow">正在编辑</small><h3 id="site-current-title">当前画布</h3><p id="site-save-note" class="site-note"></p></div><button id="site-update">保存当前活动</button><button id="site-final">标为定稿</button></div><details id="site-current-settings"><summary>备份与设置</summary><label>定稿修改原因（选填）<input id="site-final-reason" maxlength="1000"></label><button id="site-export-current">下载当前项目 JSON</button><label>所属场地<input id="site-current-name" maxlength="100"></label><label id="site-current-event-label">当前活动名称<input id="site-current-event" maxlength="200"></label><p id="site-current-kind" class="site-note"></p><button id="site-update-base">保存场地基础（不含摊位）</button></details></section>
     <div class="site-workspace"><section class="site-venues"><div class="site-section-heading"><h3>场地</h3><button id="site-new-button">＋ 新建场地</button></div><label class="site-search-label">搜索场地 / 活动<input id="site-search" type="search" placeholder="场地或活动名称"></label><label class="site-mobile-picker">选择场地<select id="site-mobile-select" aria-label="选择场地"></select></label><div id="site-list"></div></section>
     <section id="site-activities" hidden><small class="site-eyebrow">活动布局</small><h3 id="site-activities-title"></h3><p class="site-note">载入一份活动，继续编辑或布置。</p><div id="site-activity-list"></div>
       <details id="activity-create-details"><summary>＋ 为此场地新建活动</summary><form id="activity-create-form"><label>活动名称<input id="activity-name" required maxlength="200" placeholder="如：NEED! FLEA 2027"></label><label>活动布局来源<select id="activity-source"><option value="base">从空白场地开始</option><option value="current">复制当前画布布局</option><option value="file">导入项目 JSON</option></select></label><label id="activity-file-label" hidden>活动项目 JSON<input id="activity-file" type="file" accept=".json"></label><p class="site-note">JSON 自带底图时使用其底图；没有底图时继承此场地基础。新建活动后，修改只保存到该活动。</p><button id="activity-create" type="submit">保存并载入新活动</button></form></details>
@@ -52,6 +52,9 @@
   function baseProject(project, name) {
     const base = structuredClone(project);
     Object.assign(base, { version: 3, items: [], nextId: 1, eraserMarks: [], venue: null, site: { name, eventName: '' } });
+    if (base.planning) {
+      for (const key of ['origin','demands','routes','finalReason']) delete base.planning[key];
+    }
     if (base.environment) { base.environment.objects = (base.environment.objects || []).filter(o => !['stage','truss','counter','sign','table','fence'].includes(o.type)); base.environment.views = []; }
     return base;
   }
@@ -164,7 +167,7 @@
   async function changeAndSave(project, save, siteId, activityId) {
     const previous = snapshot(), binding = [activeSiteId, activeActivityId, baseline];
     await loadSafely(project);
-    try { project.cadFile = window.projectIO.capture(false).cadFile; await save(); }
+    try { const parsed = snapshot(); project.cadFile = parsed.cadFile; project.metersPerUnit = parsed.metersPerUnit; await save(); }
     catch (err) { try { await window.projectIO.load(previous); } catch {} [activeSiteId, activeActivityId, baseline] = binding; renderCurrent(); throw err; }
     activeSiteId = siteId; activeActivityId = activityId; selectedSiteId = siteId; baseline = fingerprint(snapshot());
     await refreshList();
@@ -182,7 +185,7 @@
     if (site) {
       $('site-current-title').textContent = `${activity?.name || site.name} · ${activity ? site.name : '场地基础'}`;
       $('site-current-name').value = site.name; $('site-current-event').value = activity?.name || '';
-      $('site-current-event-label').hidden = $('site-update').hidden = !activity;
+      $('site-final').hidden = $('site-current-event-label').hidden = $('site-update').hidden = !activity;
       $('site-current-kind').textContent = activity ? '保存当前活动只更新这份布局，其他活动不变。保存场地基础仅更新可复用的底图与环境。' : '当前是场地基础，不含活动布局。可在下方新建活动。';
     }
     $('site-library-button').textContent = site ? `场地：${site.name}` : '🏛 选择场地';
@@ -217,7 +220,7 @@
     for (const activity of scoped) {
       const row = document.createElement('div'); row.className = 'site-record';
       const title = document.createElement('strong'); title.textContent = activity.name + (activity.id === activeActivityId ? ' · 当前活动' : '');
-      const meta = document.createElement('p'); meta.textContent = `${activity.itemCount} 个标注 · ${new Date(activity.updatedAt).toLocaleString()}`;
+      const meta = document.createElement('p'); meta.textContent = `${activity.status==='final'?'定稿 · ':''}${activity.itemCount} 个标注 · ${new Date(activity.updatedAt).toLocaleString()}`;
       const actions = document.createElement('div'); actions.className = 'site-actions';
       actions.append(button('载入编辑', () => loadActivity(activity.id), 'activityLoad', activity.id), button('导出活动 JSON', async () => {
         const saved = await transaction(['activityProjects'], 'readonly', tx => tx.objectStore('activityProjects').get(activity.id));
@@ -249,7 +252,7 @@
   $('site-create-form').onsubmit = e => {
     e.preventDefault(); const name = $('site-name').value, event = $('site-event').value, source = $('site-source').value, file = $('site-file').files[0];
     run(async () => {
-      const title = checkSiteName(name), raw = source === 'current' ? window.projectIO.capture() : await projectFromFile(file);
+      const title = checkSiteName(name), raw = source === 'current' ? window.projectIO.captureForLibrary() : await projectFromFile(file);
       if (!hasContent(raw)) throw new Error('当前画布为空，请先导入 CAD 或项目。');
       if (source !== 'current' && !confirmReplace()) return;
       const id = crypto.randomUUID(), now = Date.now(), firstName = event.trim() || String(raw.site?.eventName || '').trim() || (raw.items.length || raw.environment?.objects?.some(o => ['stage','truss','counter','sign','table','fence'].includes(o.type)) || raw.environment?.views?.length ? '初始活动' : '');
@@ -257,7 +260,7 @@
       const activityId = firstName ? crypto.randomUUID() : null;
       const project = activityId ? activityProject(raw, site, names(firstName, 200, '活动名称')) : base;
       await changeAndSave(project, () => transaction(['sites','projects','activities','activityProjects'], 'readwrite', tx => {
-        base.cadFile = project.cadFile;
+        base.cadFile = project.cadFile; base.metersPerUnit = project.metersPerUnit;
         tx.objectStore('sites').put(site); tx.objectStore('projects').put({ id, project: base });
         if (activityId) { tx.objectStore('activities').put({ id: activityId, siteId: id, name: firstName, createdAt: now, updatedAt: now, itemCount: raw.items.length }); tx.objectStore('activityProjects').put({ id: activityId, project }); }
       }), id, activityId);
@@ -271,7 +274,7 @@
       const title = checkActivityName(name, siteId), stored = await transaction(['projects'], 'readonly', tx => tx.objectStore('projects').get(siteId));
       if (!stored) throw new Error('场地基础不存在。');
       if (source === 'file' && !/\.json$/i.test(file?.name || '')) throw new Error('请选择活动项目 JSON。');
-      const raw = source === 'current' ? window.projectIO.capture() : source === 'base' ? stored.project : await projectFromFile(file);
+      const raw = source === 'current' ? window.projectIO.captureForLibrary() : source === 'base' ? stored.project : await projectFromFile(file);
       const project = validateProject(activityProject(raw, site, title, stored.project));
       if (source !== 'current' && !confirmReplace()) return;
       const id = crypto.randomUUID(), now = Date.now();
@@ -282,26 +285,65 @@
       $('activity-create-form').reset(); $('activity-file-label').hidden = true; $('activity-create-details').open = false; message('新活动已保存并载入，其他活动布局保持不变。');
     });
   };
-  $('site-update').onclick = () => {
+  function saveActivity(final) {
     const siteId = activeSiteId, id = activeActivityId, name = $('site-current-event').value, siteName = $('site-current-name').value;
     run(async () => {
       const old = activities.find(a => a.id === id && a.siteId === siteId), site = records.find(r => r.id === siteId);
       if (!old || !site) throw new Error('请先载入活动，或在此场地下新建活动。');
       const title = checkActivityName(name, siteId, id), venueName = checkSiteName(siteName, siteId), now = Date.now();
-      const project = activityProject(window.projectIO.capture(), { ...site, name: venueName }, title);
+      const project = activityProject(window.projectIO.captureForLibrary(), { ...site, name: venueName }, title);
+      if (final) project.planning = { ...project.planning, finalReason: $('site-final-reason').value.trim() };
       await transaction(['sites','activities','activityProjects'], 'readwrite', tx => {
         tx.objectStore('sites').put({ ...site, name: venueName, updatedAt: now });
-        tx.objectStore('activities').put({ ...old, name: title, updatedAt: now, itemCount: project.items.length });
+        tx.objectStore('activities').put({ ...old, name: title, status: final ? 'final' : 'draft', finalToken: final ? crypto.randomUUID() : null, updatedAt: now, itemCount: project.items.length });
         tx.objectStore('activityProjects').put({ id, project });
       });
-      window.projectIO.setSite(project.site); baseline = fingerprint(snapshot()); await refreshList(); message('当前活动布局已保存，其他活动没有修改。');
+      planningData = project.planning; $('site-final-reason').value = '';
+      window.projectIO.setSite(project.site); baseline = fingerprint(snapshot()); await refreshList(); message(final ? '已保存定稿版本。' : '当前活动布局已保存。');
     });
+  }
+  $('site-update').onclick = () => saveActivity(false);
+  $('site-final').onclick = () => saveActivity(true);
+  window.savePlanningDraft = async (project, original) => {
+    if (busy) throw new Error('场地库正在保存，请稍后重试。');
+    lock(true);
+    try {
+      if (!activeSiteId && window.venueCloud?.connected()) {
+        await window.venueCloud.reconnect(); storage = 'cloud'; cloudView = true; firstOpen = false;
+      }
+      await refreshList();
+      const bound = records.find(r=>r.id===activeSiteId);
+      const now=Date.now(), id=crypto.randomUUID(), source=activities.find(a=>a.id===activeActivityId);
+      let name=(original.site?.name || original.cadFile?.name || '实测场地').slice(0,90);
+      if (!bound) { let n=1; const base=name; while(records.some(s=>s.name===name)) name=base+' · '+(++n); }
+      const site=bound || {id:crypto.randomUUID(),name,sourceName:original.cadFile?.name || '实测场地',createdAt:now,updatedAt:now};
+      const prefix=(source?.name || original.site?.eventName || site.name).slice(0,170);
+      let number=1,title;
+      do { title=prefix+' · 草案 '+number++; } while(activities.some(a=>a.siteId===site.id && a.name===title));
+      project.site={name:site.name,eventName:title};
+      const originalId=crypto.randomUUID(), saveOriginal=!source || baseline!==fingerprint(original);
+      const record=(id,name,project)=>({id,siteId:site.id,name,status:'draft',itemCount:project.items.length,createdAt:now,updatedAt:now});
+      await changeAndSave(project,()=>transaction(['sites','projects','activities','activityProjects'],'readwrite',tx=>{
+        if(!bound) {
+          tx.objectStore('sites').put(site); tx.objectStore('projects').put({id:site.id,project:baseProject(original,site.name)});
+        }
+        // Preserve unbound or manually edited source layouts as their own snapshot.
+        if(saveOriginal) {
+          const originalName='原始布局 · '+originalId.slice(0,8);
+          tx.objectStore('activities').put(record(originalId,originalName,original));
+          tx.objectStore('activityProjects').put({id:originalId,project:activityProject(original,site,originalName)});
+        }
+        tx.objectStore('activities').put({...record(id,title,project),parentActivityId:saveOriginal?originalId:source.id});
+        tx.objectStore('activityProjects').put({id,project});
+      }),site.id,id);
+      return title;
+    } finally { lock(false); }
   };
   $('site-update-base').onclick = () => {
     const id = activeSiteId, name = $('site-current-name').value;
     run(async () => {
       const site = records.find(r => r.id === id); if (!site) throw new Error('请先载入场地或活动。');
-      const title = checkSiteName(name, id), base = baseProject(window.projectIO.capture(), title);
+      const title = checkSiteName(name, id), base = baseProject(window.projectIO.captureForLibrary(), title);
       await transaction(['sites','projects'], 'readwrite', tx => { tx.objectStore('sites').put({ ...site, name: title, updatedAt: Date.now(), sourceName: base.cadFile?.name || '项目 JSON' }); tx.objectStore('projects').put({ id, project: base }); });
       window.projectIO.setSite({ name: title, eventName: activities.find(a => a.id === activeActivityId)?.name || '' });
       if (!activeActivityId) baseline = fingerprint(snapshot());

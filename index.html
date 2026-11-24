@@ -197,6 +197,7 @@
   #drop-hint.show { display: flex; }
 </style>
 <link rel="stylesheet" href="toolbar.css?v=2">
+<link rel="stylesheet" href="planner.css?v=2">
 </head>
 <body>
 
@@ -212,6 +213,7 @@
     </div>
     <div class="toolbar-quick">
       <button class="tb-btn" onclick="saveProject()" title="保存完整项目 JSON">💾 保存</button>
+      <button class="tb-btn" id="btn-planner" aria-expanded="false" aria-controls="planner-panel">生成摊位初稿</button>
       <button class="tb-btn" id="btn-environment" onclick="openEnvironment()" aria-controls="environment-panel" aria-expanded="false" title="结构高度、方案布置、二维 / 三维与出图">🏛 场景搭建</button>
     </div>
   </div>
@@ -449,15 +451,16 @@
 
 <script src="libdxfrw.js"></script>
 <script src="cad-text.js?v=1"></script>
-<script src="dxf-parser.js?v=9"></script>
+<script src="dxf-parser.js?v=10"></script>
 <script src="renderer.js?v=10"></script>
-<script src="booth.js?v=11"></script>
+<script src="booth.js?v=12"></script>
 <script src="iso-renderer.js?v=6"></script>
-<script src="app.js?v=28"></script>
+<script src="app.js?v=32"></script>
 <script src="toolbar.js?v=3"></script>
 <script src="cloud-config.js?v=3"></script>
-<script src="site-cloud.js?v=3"></script>
-<script src="site-library.js?v=8"></script>
+<script src="site-cloud.js?v=6"></script>
+<script src="site-library.js?v=10"></script>
 <script type="module" src="environment.js?v=22"></script>
+<script type="module" src="planner.js?v=6"></script>
 </body>
 </html>

@@ -5,6 +5,12 @@
  */
 
 class DXFParser {
+  static metersPerUnit(code) {
+    return ({1:.0254, 2:.3048, 3:1609.344, 4:.001, 5:.01, 6:1, 7:1000,
+      8:2.54e-8, 9:2.54e-5, 10:.9144, 11:1e-10, 12:1e-9, 13:1e-6,
+      14:.1, 15:10, 16:100, 17:1e9, 18:149597870700, 19:9.4607304725808e15,
+      20:3.085677581491367e16, 21:1200/3937, 22:100/3937, 23:3600/3937, 24:6336000/3937})[code] || null;
+  }
   parse(dxfString) {
     const sourceLines = dxfString.split(/\r?\n/);
     const lines = sourceLines.map(l => l.trim());
@@ -37,7 +43,14 @@ class DXFParser {
           // Read section name
           const nc = next(); // should be 2
           const sectionName = next();
-          if (sectionName === 'ENTITIES') {
+          if (sectionName === 'HEADER') {
+            for (let j = i; j + 3 < lines.length && lines[j] !== '0'; j += 2) {
+              if (lines[j] === '9' && lines[j+1] === '$INSUNITS' && lines[j+2] === '70') {
+                result.metersPerUnit = DXFParser.metersPerUnit(Number(lines[j+3]));
+                break;
+              }
+            }
+          } else if (sectionName === 'ENTITIES') {
             this._parseEntities(lines, i, result.entities, result.layers);
           } else if (sectionName === 'TABLES') {
             this._parseTables(lines, i, result.layers);

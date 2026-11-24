@@ -433,6 +433,17 @@ class BoothSystem {
       }
       ctx.shadowBlur = 0;
 
+      if (item.frontSide === 1 || item.frontSide === -1) {
+        const edgeY = -item.frontSide * sh / 2;
+        const size = Math.min(6, sw / 5, sh / 4);
+        ctx.beginPath();
+        ctx.moveTo(0, edgeY);
+        ctx.lineTo(-size, edgeY + item.frontSide * size);
+        ctx.lineTo(size, edgeY + item.frontSide * size);
+        ctx.closePath();
+        ctx.fillStyle = '#184e4a';
+        ctx.fill();
+      }
       // Label (only if user set one) — always upright
       if (item.label) {
         ctx.save();

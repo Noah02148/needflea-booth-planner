@@ -11,6 +11,7 @@ export function validateProject(project) {
 export function validateChange(change) {
   if (!change || !Number.isSafeInteger(change.expectedRevision) || change.expectedRevision < 0 || !/^[a-f0-9-]{36}$/i.test(change.operationId || '')) fail(400, '提交版本无效，请刷新云端场地库。');
   if (!change.changes || Object.keys(change.changes).some(key => !stores.includes(key))) fail(400, '场地变更格式无效。');
+  if (change.deletions !== undefined && (!change.deletions || Array.isArray(change.deletions) || typeof change.deletions !== 'object' || Object.keys(change.deletions).some(key => !stores.includes(key)))) fail(400, '删除记录格式无效。');
   for (const store of stores) {
     const rows = change.changes[store] || [];
     if (!Array.isArray(rows) || rows.length > 10000) fail(400, '一次提交的记录过多。');
@@ -28,6 +29,8 @@ export function validateChange(change) {
         if (store === 'activities' && !validId(row.siteId)) fail(400, '活动所属场地无效。');
       }
     }
+    const deleted = change.deletions?.[store] === undefined ? [] : change.deletions[store];
+    if (!Array.isArray(deleted) || deleted.length > 10000 || deleted.some(id => !validId(id) || ids.has(id)) || new Set(deleted).size !== deleted.length) fail(400, '删除记录编号无效、重复或与保存冲突。');
   }
 }
 export function applyChange(current, change, projectRows) {
@@ -35,6 +38,9 @@ export function applyChange(current, change, projectRows) {
   for (const store of stores) {
     const map = new Map(current[store].map(row => [row.id, row]));
     for (const row of projectRows[store] || change.changes[store] || []) map.set(row.id, row);
+    for (const id of change.deletions?.[store] || []) {
+      if (!map.delete(id)) fail(404, '要删除的记录不存在，请刷新云端场地库。');
+    }
     next[store] = [...map.values()];
   }
   const sites = new Set(next.sites.map(row => row.id)), activityIds = new Set(next.activities.map(row => row.id));
@@ -45,6 +51,6 @@ export function applyChange(current, change, projectRows) {
     const names = group.map(row => row.name.trim().toLocaleLowerCase());
     if (new Set(names).size !== names.length) fail(409, '云端已有同名场地或活动，请刷新后更换名称。');
   }
-  if (!stores.some(store => change.changes[store]?.length)) fail(400, '没有需要保存的修改。');
+  if (!stores.some(store => change.changes[store]?.length || change.deletions?.[store]?.length)) fail(400, '没有需要保存的修改。');
   return next;
 }

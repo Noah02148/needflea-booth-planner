@@ -39,6 +39,55 @@ export function ossStore(client, prefix = 'needflea/library/') {
     return raw;
   }
   return {
+    async putCadChunk(digest, bytes) {
+      if (!bytes.length || bytes.length > 2*1024*1024 || hash(bytes)!==digest) fail(400,'底图片段校验失败。');
+      await check();
+      await putNew(`${prefix}cad-chunks/${digest}.gz`, gzipSync(bytes), 'application/octet-stream');
+    },
+    async getCadChunk(digest) {
+      if (!/^[a-f0-9]{64}$/.test(digest)) fail(400,'底图片段编号无效。');
+      const data = await get(`${prefix}cad-chunks/${digest}.gz`);
+      if (!data) fail(400,'底图片段缺失，请重新保存。');
+      const bytes = gunzipSync(data,{maxOutputLength:2*1024*1024});
+      if (hash(bytes)!==digest) fail(500,'底图片段校验失败。');
+      return bytes;
+    },
+    async verifyCadChunks(chunks) {
+      if (!Array.isArray(chunks) || !chunks.length || chunks.length > 128 ||
+          chunks.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) {
+        fail(400, '底图片段清单无效。');
+      }
+      // Upload verifies the digest before creating each immutable object.
+      // Check existence without expanding the whole drawing in FC memory.
+      const ids = [...new Set(chunks)];
+      for (let i = 0; i < ids.length; i += 8) {
+        await Promise.all(ids.slice(i, i + 8).map(async id => {
+          try { await client.head(`${prefix}cad-chunks/${id}.gz`); }
+          catch (error) {
+            if (error.status === 404 || error.code === 'NoSuchKey') fail(400, '底图片段缺失，请重新保存。');
+            throw error;
+          }
+        }));
+      }
+    },
+    async restoreCad(chunks) {
+      if (!Array.isArray(chunks) || !chunks.length || chunks.length>128) fail(400,'底图片段清单无效。');
+      const decoder = new TextDecoder();
+      let json = '';
+      for (const id of chunks) json += decoder.decode(await this.getCadChunk(id), { stream: true });
+      let cad;
+      try { cad = JSON.parse(json + decoder.decode()); } catch { fail(400,'云端底图无效。'); }
+      if (typeof cad?.base64 !== 'string' || !cad.base64 || typeof cad.name !== 'string') fail(400,'云端 DWG 底图不完整。');
+      return cad;
+    },
+    async knowledgeGet(key) {
+      const data = await get(`${prefix}knowledge/v1/${key}.gz`);
+      return data ? JSON.parse(gunzipSync(data, { maxOutputLength: MAX })) : null;
+    },
+    async knowledgePut(key, value) {
+      await check();
+      return putNew(`${prefix}knowledge/v1/${key}.gz`, gzipSync(JSON.stringify(value)), 'application/octet-stream');
+    },
     async latest() {
       await check();
       let token, last;
@@ -65,7 +114,7 @@ export function ossStore(client, prefix = 'needflea/library/') {
       for (let i = 0; i < (slim.environment?.photos?.length || 0); i++) await extract(slim.environment.photos[i], 'dataUrl', ['environment', 'photos', i, 'dataUrl']);
       return blob(JSON.stringify({ schema: 'needflea-cloud-project/1', project: slim, blobs }));
     },
-    async readProject(digest) {
+    async readProject(digest, packedCad = false) {
       const packed = JSON.parse((await readBlob(digest)).toString());
       if (packed.schema !== 'needflea-cloud-project/1') fail(500, '云端项目格式不受支持。');
       const project = packed.project;
@@ -74,6 +123,9 @@ export function ossStore(client, prefix = 'needflea/library/') {
         let parent = project;
         for (const key of item.path.slice(0, -1)) parent = parent[key];
         parent[item.path.at(-1)] = (await readBlob(item.hash)).toString();
+      }
+      if (!packedCad && project.cloudCadChunks) {
+        project.cadFile = await this.restoreCad(project.cloudCadChunks); delete project.cloudCadChunks;
       }
       return project;
     },

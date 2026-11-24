@@ -2,9 +2,14 @@
   "name": "needflea-cloud-library",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
-  "scripts": { "start": "node server.mjs" },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  },
   "dependencies": {
-    "ali-oss": "6.23.0"
+    "ali-oss": "6.23.0",
+    "polygon-clipping": "0.15.7"
   }
 }
